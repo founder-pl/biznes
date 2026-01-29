@@ -287,6 +287,7 @@ class GameScreen(Screen):
         Binding("r", "show_risk", "Ryzyko"),
         Binding("g", "glossary", "Słownik"),
         Binding("f", "finanse", "Finanse"),
+        Binding("p", "portfele", "Portfele"),
         Binding("e", "equity", "Equity"),
         Binding("h", "historia", "Historia"),
         Binding("q", "quit_game", "Wyjście"),
@@ -347,6 +348,7 @@ class GameScreen(Screen):
         
         info = tree.root.add("📋 Informacje")
         info.add_leaf("💰 Finanse", data="finanse")
+        info.add_leaf("💼 Portfele", data="portfele")
         info.add_leaf("📊 Equity", data="equity")
         info.add_leaf("📜 Historia", data="historia")
         info.expand()
@@ -362,6 +364,8 @@ class GameScreen(Screen):
         data = event.node.data
         if data == "finanse":
             self.action_finanse()
+        elif data == "portfele":
+            self.action_portfele()
         elif data == "equity":
             self.action_equity()
         elif data == "historia":
@@ -795,6 +799,9 @@ class GameScreen(Screen):
     def action_glossary(self) -> None:
         self.app.push_screen(GlossaryScreen())
     
+    def action_portfele(self) -> None:
+        self.app.push_screen(PortfeleScreen(self.game_state, self.app.config))
+    
     def action_quit_game(self) -> None:
         self.app.pop_screen()
 
@@ -825,6 +832,93 @@ class FinanceScreen(Screen):
             classes="info-box"
         )
         yield Footer()
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.app.pop_screen()
+    
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+
+class PortfeleScreen(Screen):
+    """Ekran portfeli wspólników i biznesu"""
+    
+    BINDINGS = [Binding("escape", "back", "Wróć")]
+    
+    def __init__(self, game_state: GameState, config):
+        super().__init__()
+        self.game_state = game_state
+        self.config = config
+    
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Container(
+            Static("💼 PRZEJRZYSTOŚĆ FINANSOWA", classes="screen-title"),
+            Rule(),
+            ScrollableContainer(id="portfele-content"),
+            Button("← Wróć", id="back"),
+            classes="glossary-box"
+        )
+        yield Footer()
+    
+    def on_mount(self) -> None:
+        content = self.query_one("#portfele-content")
+        c = self.game_state.company
+        
+        # Portfele wspólników
+        content.mount(Static("[bold cyan]┌─ PORTFELE WSPÓLNIKÓW ─────────────────┐[/bold cyan]"))
+        
+        for f in c.founders:
+            verified = "✓" if f.krs_verified and f.debtor_registry_verified else "⚠️"
+            content.mount(Static(f"\n[bold]👤 {f.name} {verified}[/bold]"))
+            content.mount(Static(f"   Equity: {f.equity_percentage:.0f}% (vested: {f.vested_percentage:.1f}%)"))
+            content.mount(Static(f"   Zainwestowane: {f.personal_invested:,.0f} PLN"))
+            content.mount(Static(f"   Otrzymane: {f.total_received:,.0f} PLN"))
+            
+            # Wkłady
+            contributions = []
+            if f.mvp_value > 0:
+                contributions.append(f"MVP: {f.mvp_value:,.0f} PLN")
+            if f.contacts_count > 0:
+                contributions.append(f"Kontakty: {f.contacts_count}")
+            if f.experience_years > 0:
+                contributions.append(f"Doświadczenie: {f.experience_years} lat")
+            if contributions:
+                content.mount(Static(f"   Wkłady: {', '.join(contributions)}"))
+            
+            balance = f.total_received - f.personal_invested
+            color = "green" if balance >= 0 else "red"
+            content.mount(Static(f"   Bilans: [{color}]{balance:+,.0f} PLN[/{color}]"))
+        
+        content.mount(Static("\n[bold cyan]└──────────────────────────────────────┘[/bold cyan]"))
+        
+        # Finanse biznesu
+        content.mount(Static("\n[bold cyan]┌─ FINANSE BIZNESU ─────────────────────┐[/bold cyan]"))
+        content.mount(Static(f"\n💰 STAN KONTA FIRMOWEGO"))
+        content.mount(Static(f"   Gotówka: {c.cash_on_hand:,.0f} PLN"))
+        content.mount(Static(f"   MRR: {c.mrr:,.0f} PLN"))
+        content.mount(Static(f"   Burn rate: {c.monthly_burn_rate:,.0f} PLN/mies"))
+        content.mount(Static(f"   Runway: {c.runway_months()} mies"))
+        
+        # P&L
+        profit = c.mrr - c.monthly_burn_rate
+        color = "green" if profit >= 0 else "red"
+        content.mount(Static(f"\n[bold]📊 MIESIĘCZNY P&L[/bold]"))
+        content.mount(Static(f"   [green]Przychody (MRR):[/green] {c.mrr:,.0f} PLN"))
+        content.mount(Static(f"   [red]Koszty (burn):[/red] {c.monthly_burn_rate:,.0f} PLN"))
+        content.mount(Static(f"   [{color}]WYNIK: {profit:+,.0f} PLN[/{color}]"))
+        
+        # Podział zysków
+        if profit > 0 and len(c.founders) > 1:
+            content.mount(Static(f"\n[bold]📈 POTENCJALNY PODZIAŁ ZYSKÓW[/bold]"))
+            for f in c.founders:
+                share = profit * (f.equity_percentage / 100)
+                content.mount(Static(f"   {f.name} ({f.equity_percentage:.0f}%): {share:,.0f} PLN/mies"))
+        
+        content.mount(Static("\n[bold cyan]└──────────────────────────────────────┘[/bold cyan]"))
+        
+        if not self.game_state.agreement_signed and len(c.founders) > 1:
+            content.mount(Static("\n[bold red]⚠️ Bez SHA podział może być sporny![/bold red]"))
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.app.pop_screen()
