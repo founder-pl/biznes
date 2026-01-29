@@ -1,0 +1,49 @@
+equity:
+  esop_pool: 10
+  partner_percentage: 34
+  player_percentage: 56
+legal:
+  cliff_months: 12
+  preferred_form: psa
+  protections:
+    good_bad_leaver: true
+    ip_protection: true
+    non_compete: true
+    non_compete_months: 12
+    tag_along: true
+  vesting_months: 48
+mvp:
+  calculated_value: 30100.0
+  external_costs: 100.0
+  has_mvp: true
+  hourly_rate: 150
+  hours_invested: 200
+partner:
+  capital: 0.0
+  customers: 0
+  has_contacts: true
+  industry_experience_years: 20
+  name: f2
+  startup_experience: 3
+  verified:
+    debts: false
+    krs: false
+player:
+  name: f1
+  role: technical
+resources:
+  max_months_no_salary: 0
+  runway_months: 2
+  savings: 0.0
+  work_without_salary: false
+simulation:
+  detailed_explanations: true
+  difficulty: normal
+  random_events: true
+targets:
+  12_months:
+    customers: 150
+    mrr: 30000.0
+  6_months:
+    customers: 50
+    mrr: 10000.0
