@@ -1,0 +1,587 @@
+# Biznes - Gra Edukacyjna dla Founderów
+# Konfiguracja wszystkich aspektów prawnych, scenariuszy i parametrów gry
+
+game_info:
+  name: "Biznes - Symulator Startupu"
+  version: "1.0.0"
+  description: "Edukacyjna gra symulująca zakładanie i prowadzenie startupu w Polsce"
+  
+# ============================================================================
+# FORMY PRAWNE DZIAŁALNOŚCI
+# ============================================================================
+legal_forms:
+  psa:
+    name: "Prosta Spółka Akcyjna (PSA)"
+    min_capital: 1
+    work_as_contribution: true
+    share_transfer: "email"
+    esop_complexity: "low"
+    registration_pcc: 0
+    registry_cost_yearly: 2250  # średnia 1500-3000
+    advantages:
+      - "Możliwość wniesienia pracy jako wkładu - nie potrzebujesz kapitału"
+      - "Minimalny kapitał to tylko 1 PLN"
+      - "Zbycie akcji przez e-mail bez notariusza"
+      - "Uproszczony vesting i ESOP"
+      - "Warranty subskrypcyjne dostępne"
+      - "Akcje założycielskie chronią przed rozwodnieniem głosów"
+    disadvantages:
+      - "Obowiązkowy rejestr akcjonariuszy u notariusza (1500-3000 PLN/rok)"
+      - "Stosunkowo nowa forma (od 2021) - mniej orzecznictwa"
+      - "Niektórzy kontrahenci mogą preferować tradycyjne formy"
+    recommended_for:
+      - "Startup z planem pozyskania VC"
+      - "Technical co-founder bez kapitału"
+      - "Projekty wymagające elastycznego equity"
+      
+  sp_zoo:
+    name: "Spółka z ograniczoną odpowiedzialnością (Sp. z o.o.)"
+    min_capital: 5000
+    work_as_contribution: false
+    share_transfer: "notariusz"
+    esop_complexity: "high"
+    registration_pcc: 0.005  # 0.5% od kapitału
+    registry_cost_yearly: 0
+    advantages:
+      - "Ugruntowane orzecznictwo (250 000+ spółek w Polsce)"
+      - "Rozpoznawalność dla banków i kontrahentów"
+      - "Niższe koszty roczne"
+      - "Bardziej przewidywalna"
+    disadvantages:
+      - "Kapitał minimalny 5000 PLN"
+      - "Praca/usługi nie mogą być wkładem"
+      - "Zbycie udziałów wymaga notariusza i KRS"
+      - "Skomplikowany ESOP (phantom shares, opcje)"
+      - "Brak warrantów subskrypcyjnych"
+    recommended_for:
+      - "Bootstrapping bez inwestorów"
+      - "Firma usługowa IT"
+      - "Wspólnicy z kapitałem"
+
+  jdg:
+    name: "Jednoosobowa Działalność Gospodarcza (JDG)"
+    min_capital: 0
+    work_as_contribution: false
+    share_transfer: "n/a"
+    esop_complexity: "n/a"
+    registration_pcc: 0
+    registry_cost_yearly: 0
+    advantages:
+      - "Brak wymaganego kapitału"
+      - "Prosta rejestracja przez CEIDG"
+      - "Niskie koszty prowadzenia"
+      - "Pełna kontrola nad działalnością"
+    disadvantages:
+      - "Brak ograniczenia odpowiedzialności"
+      - "Nie można mieć wspólników"
+      - "Trudniej pozyskać inwestora"
+      - "Odpowiedzialność całym majątkiem"
+    recommended_for:
+      - "Freelancing"
+      - "Testowanie pomysłu przed założeniem spółki"
+      - "Jednoosobowe projekty"
+
+# ============================================================================
+# PODZIAŁ EQUITY
+# ============================================================================
+equity_scenarios:
+  programmer_brings_mvp:
+    description: "Programista z gotowym MVP, partner dołącza"
+    recommended_split:
+      programmer: [55, 70]
+      business_partner: [30, 45]
+    justification: "MVP redukuje ryzyko techniczne i ma wymierną wartość"
+    
+  equal_from_start:
+    description: "Obaj founderzy startują razem od zera"
+    recommended_split:
+      programmer: [50, 60]
+      business_partner: [40, 50]
+    justification: "Wspólny start uzasadnia bardziej równy podział"
+    
+  equity_for_sweat:
+    description: "Programista za equity, biznes finansuje"
+    recommended_split:
+      programmer: [30, 40]
+      business_partner: [60, 70]
+    justification: "Kapitał finansowy redukuje ryzyko osobiste programisty"
+
+# ============================================================================
+# VESTING
+# ============================================================================
+vesting:
+  standard:
+    total_months: 48
+    cliff_months: 12
+    cliff_percentage: 25
+    monthly_after_cliff: 2.083  # (75% / 36 miesięcy)
+    
+  accelerated:
+    total_months: 36
+    cliff_months: 6
+    cliff_percentage: 16.67
+    monthly_after_cliff: 2.314
+    
+  descriptions:
+    cliff: "Minimalny okres pracy przed nabyciem jakichkolwiek udziałów"
+    vesting: "Stopniowe nabywanie praw do udziałów w czasie"
+    reverse_vesting: "Founder ma udziały od razu, ale zobowiązuje się do zwrotu przy wcześniejszym odejściu"
+
+# ============================================================================
+# GOOD/BAD LEAVER
+# ============================================================================
+leaver_clauses:
+  good_leaver:
+    conditions:
+      - "Śmierć"
+      - "Trwała niezdolność do pracy"
+      - "Odejście za zgodą rady nadzorczej"
+      - "Choroba uniemożliwiająca pracę"
+      - "Redukcja etatu z przyczyn leżących po stronie spółki"
+    consequences:
+      - "Zachowanie udziałów vested"
+      - "Sprzedaż po cenie rynkowej"
+      
+  bad_leaver:
+    conditions:
+      - "Naruszenie zakazu konkurencji"
+      - "Rażące naruszenie obowiązków"
+      - "Działanie na szkodę spółki"
+      - "Dobrowolne odejście przed cliff/terminem"
+      - "Zwolnienie dyscyplinarne"
+      - "Popełnienie przestępstwa"
+    consequences:
+      - "Utrata wszystkich udziałów (vested i unvested)"
+      - "Lub wykup po 10-50% wartości nominalnej"
+
+# ============================================================================
+# MECHANIZMY OCHRONNE
+# ============================================================================
+protection_mechanisms:
+  tag_along:
+    name: "Tag-along (prawo przyłączenia)"
+    description: "Mniejszościowy wspólnik może dołączyć do sprzedaży większościowego"
+    importance: "critical"
+    for_whom: "Technical co-founder z mniejszym pakietem"
+    
+  drag_along:
+    name: "Drag-along (prawo pociągnięcia)"
+    description: "Większościowy może zmusić mniejszościowego do sprzedaży"
+    importance: "medium"
+    for_whom: "Ułatwia exit dla całej spółki"
+    
+  anti_dilution:
+    full_ratchet:
+      name: "Full Ratchet"
+      description: "Bardzo agresywna ochrona inwestora"
+      risk_for_founder: "extreme"
+      
+    weighted_average:
+      name: "Weighted Average Broad-Based"
+      description: "Standardowa, fair ochrona"
+      risk_for_founder: "low"
+      
+  liquidation_preference:
+    non_participating:
+      name: "Non-participating (single dip)"
+      description: "Inwestor wybiera: preference ALBO udział procentowy"
+      founder_friendly: true
+      market_share: 60
+      
+    participating:
+      name: "Participating (double dip)"
+      description: "Inwestor dostaje preference I udział procentowy"
+      founder_friendly: false
+      market_share: 40
+
+# ============================================================================
+# KARY UMOWNE
+# ============================================================================
+contractual_penalties:
+  nda_violation:
+    min: 30000
+    max: 50000
+    per: "przypadek"
+    
+  non_compete_violation:
+    min: 100000
+    max: 200000
+    per: "naruszenie"
+    
+  ip_violation:
+    min: 150000
+    max: 300000
+    per: "przypadek"
+    
+  code_removal_delay:
+    amount: 5000
+    per: "dzień opóźnienia"
+
+# ============================================================================
+# FORMY WSPÓŁPRACY (ZATRUDNIENIE)
+# ============================================================================
+employment_forms:
+  b2b:
+    name: "Kontrakt B2B"
+    tax_options:
+      linear: 19
+      lump_sum: 12
+      ip_box: 5
+    zus: "jak przedsiębiorca"
+    advantages:
+      - "Niższe podatki (IP Box 5%)"
+      - "Elastyczność"
+      - "Możliwość odliczeń"
+    disadvantages:
+      - "Brak urlopu płatnego"
+      - "Brak L4"
+      - "Składki ZUS niezależnie od zarobków"
+    recommended: true
+    
+  uop:
+    name: "Umowa o pracę"
+    tax_rates: [12, 32]
+    zus: "pełne składki"
+    advantages:
+      - "Stabilność"
+      - "Urlop płatny"
+      - "L4"
+      - "50% KUP dla twórców"
+    disadvantages:
+      - "Wyższe podatki"
+      - "Ryzyko podważenia przy wspólniku większościowym"
+    recommended: false
+    
+  shareholder_only:
+    name: "Tylko wspólnik (dywidenda)"
+    tax_rate: 19
+    zus: "brak w wieloosobowej spółce"
+    advantages:
+      - "Brak ZUS"
+      - "Prostsza struktura"
+    disadvantages:
+      - "Podwójne opodatkowanie (CIT + PIT)"
+      - "Brak bieżących wypłat"
+
+# ============================================================================
+# KOSZTY PRAWNE
+# ============================================================================
+legal_costs:
+  founders_agreement:
+    simple:
+      min: 3000
+      max: 8000
+    complex:
+      min: 10000
+      max: 20000
+      
+  investment_round:
+    min: 15000
+    max: 50000
+    
+  due_diligence_report:
+    min: 30
+    max: 50
+    
+  notary_signature_verification:
+    min: 100
+    max: 300
+
+# ============================================================================
+# RED FLAGS - SYGNAŁY OSTRZEGAWCZE
+# ============================================================================
+red_flags:
+  critical:
+    - "Brak jakiejkolwiek pisemnej umowy przed pracą"
+    - "\"Ustalimy później procent udziałów\""
+    - "Partner pobiera wynagrodzenie, ty nie"
+    - "Wiele upadłych spółek w historii partnera"
+    - "Brak żadnego skin in the game ze strony partnera"
+    
+  warning:
+    - "\"Mam genialny pomysł, potrzebuję tylko kodera\""
+    - "\"Rewolucyjna aplikacja\" bez walidacji"
+    - "\"Inwestor już czeka\" bez term sheet"
+    - "Brak wywiadów z klientami"
+    - "Partner nie ma branżowego know-how"
+    
+  questionable:
+    - "Tylko LOI bez płatności"
+    - "Vague definicje good/bad leaver"
+    - "Brak klauzuli tag-along"
+    - "Full ratchet anti-dilution"
+
+# ============================================================================
+# WALIDACJA POMYSŁU
+# ============================================================================
+validation:
+  methods:
+    - name: "Wywiady z klientami (Mom Test)"
+      minimum: 10
+      good: 20
+      description: "Pytaj o przeszłość, nie przyszłość"
+      
+    - name: "Landing page z konwersją"
+      metrics: ["CTR", "sign-ups", "email captures"]
+      
+    - name: "Smoke test"
+      description: "Sprzedaj przed zbudowaniem"
+      
+    - name: "Pre-orders"
+      strength: "strong"
+      
+    - name: "Letters of Intent"
+      strength: "weak"
+      
+    - name: "Podpisane umowy z płatnością"
+      strength: "strongest"
+
+# ============================================================================
+# METRYKI SUKCESU
+# ============================================================================
+success_metrics:
+  mrr:
+    name: "Monthly Recurring Revenue"
+    milestones:
+      early: 3000
+      traction: 10000
+      growth: 20000
+      scale: 50000
+      
+  customers:
+    milestones:
+      pilot: 10
+      validation: 50
+      market_fit: 100
+      growth: 500
+      
+  churn:
+    acceptable: 5
+    warning: 10
+    critical: 15
+    
+  cac_ltv_ratio:
+    minimum: 3
+    good: 5
+    excellent: 10
+
+# ============================================================================
+# LOSOWE ZDARZENIA
+# ============================================================================
+random_events:
+  positive:
+    - event: "Viral marketing"
+      probability: 0.05
+      effect:
+        customers_multiplier: 2.0
+        mrr_boost: 1.5
+        
+    - event: "Strategiczny partner"
+      probability: 0.08
+      effect:
+        credibility_boost: 30
+        customer_acquisition_cost_reduction: 0.3
+        
+    - event: "Nagroda branżowa"
+      probability: 0.03
+      effect:
+        credibility_boost: 20
+        valuation_multiplier: 1.2
+        
+    - event: "Kluczowy enterprise klient"
+      probability: 0.07
+      effect:
+        mrr_boost: 5000
+        credibility_boost: 25
+        
+  negative:
+    - event: "Konkurent z dużym funding"
+      probability: 0.10
+      effect:
+        market_share_loss: 0.2
+        pressure_on_pricing: true
+        
+    - event: "Kluczowy pracownik odchodzi"
+      probability: 0.15
+      effect:
+        development_delay_months: 2
+        morale_drop: 20
+        
+    - event: "Zmiana regulacji prawnych"
+      probability: 0.05
+      effect:
+        compliance_cost: 20000
+        pivot_required: false
+        
+    - event: "Cyberatak / wyciek danych"
+      probability: 0.03
+      effect:
+        reputation_damage: 40
+        legal_costs: 50000
+        customer_churn_spike: 0.25
+        
+    - event: "Problem z płynnością"
+      probability: 0.20
+      effect:
+        runway_reduction_months: 3
+        stress_level_increase: 30
+        
+    - event: "Konflikt między founderami"
+      probability: 0.12
+      effect:
+        productivity_loss: 0.3
+        may_trigger_deadlock: true
+        
+    - event: "MVP nie spełnia oczekiwań użytkowników"
+      probability: 0.25
+      effect:
+        pivot_required: true
+        development_delay_months: 4
+        morale_drop: 30
+        
+    - event: "Partner biznesowy odchodzi z kontaktami"
+      probability: 0.08
+      effect:
+        customer_loss: 0.15
+        requires_non_solicitation: true
+
+# ============================================================================
+# ETAPY ROZWOJU STARTUPU
+# ============================================================================
+startup_stages:
+  - name: "Pre-seed"
+    description: "Przed założeniem spółki, walidacja pomysłu"
+    typical_funding: 0
+    focus:
+      - "Walidacja problemu"
+      - "Founders agreement"
+      - "MVP"
+    risks:
+      - "Brak product-market fit"
+      - "Konflikt co-founderów"
+      
+  - name: "Seed"
+    description: "Pierwsi klienci, pierwsza runda"
+    typical_funding: [500000, 2000000]
+    focus:
+      - "Product-market fit"
+      - "Unit economics"
+      - "Powtarzalna sprzedaż"
+    risks:
+      - "Zbyt wczesne skalowanie"
+      - "Rozwodnienie"
+      
+  - name: "Series A"
+    description: "Skalowanie sprawdzonego modelu"
+    typical_funding: [5000000, 20000000]
+    focus:
+      - "Skalowanie"
+      - "Budowanie zespołu"
+      - "Ekspansja rynkowa"
+    risks:
+      - "Utrata kontroli"
+      - "Presja na wzrost"
+      
+  - name: "Growth"
+    description: "Dominacja rynkowa"
+    typical_funding: [20000000, 100000000]
+    focus:
+      - "Market leadership"
+      - "Międzynarodowa ekspansja"
+      - "Przygotowanie do exit"
+    risks:
+      - "Biurokracja"
+      - "Utrata innowacyjności"
+
+# ============================================================================
+# WYCENA MVP
+# ============================================================================
+mvp_valuation:
+  hourly_rates:
+    junior: [60, 80]
+    mid: [80, 120]
+    senior: [120, 200]
+    lead: [180, 300]
+    
+  typical_components:
+    - name: "Backend development"
+      hours: [100, 400]
+      
+    - name: "Frontend development"
+      hours: [80, 300]
+      
+    - name: "UI/UX Design"
+      hours: [40, 120]
+      
+    - name: "DevOps/Infrastructure"
+      hours: [20, 80]
+      
+    - name: "Testing"
+      hours: [30, 100]
+      
+  external_costs_monthly:
+    - name: "Hosting/Cloud"
+      range: [200, 2000]
+      
+    - name: "Third-party APIs"
+      range: [0, 1000]
+      
+    - name: "Tools/Licenses"
+      range: [100, 500]
+
+# ============================================================================
+# PYTANIA DO WALIDACJI PARTNERA
+# ============================================================================
+partner_validation_questions:
+  financial:
+    - "Ile własnego kapitału zainwestowałeś w projekt?"
+    - "Jaki masz runway - ile miesięcy możesz pracować bez przychodów?"
+    - "Czy masz inne źródła dochodu?"
+    
+  commitment:
+    - "Ile godzin tygodniowo możesz poświęcić na projekt?"
+    - "Czy pracujesz full-time czy part-time?"
+    - "Co się stanie jeśli projekt nie przyniesie przychodów przez 12 miesięcy?"
+    
+  validation:
+    - "Ile wywiadów z klientami przeprowadziłeś?"
+    - "Czy masz jakiekolwiek pre-ordery lub płacących klientów?"
+    - "Jak wyglądała analiza konkurencji?"
+    
+  experience:
+    - "Jakie startupy zakładałeś wcześniej?"
+    - "Jakie masz doświadczenie w tej branży?"
+    - "Czy możesz podać referencje od poprzednich współpracowników?"
+
+# ============================================================================
+# CHECKLIST PRZED WSPÓŁPRACĄ
+# ============================================================================
+collaboration_checklist:
+  legal_verification:
+    - item: "Sprawdzenie KRS (historia spółek)"
+      source: "ekrs.ms.gov.pl"
+      
+    - item: "Sprawdzenie CEIDG"
+      source: "aplikacja.ceidg.gov.pl"
+      
+    - item: "BIG InfoMonitor"
+      cost: 30
+      
+    - item: "Krajowy Rejestr Długów"
+      cost: 30
+      
+    - item: "ERIF BIG"
+      cost: 30
+      
+  documentation:
+    - "Podpisany founders agreement"
+    - "Podział equity na piśmie"
+    - "Harmonogram vestingu"
+    - "Przeniesienie praw IP"
+    - "Procedury wyjścia"
+    
+  financial:
+    - "Zweryfikowany runway partnera"
+    - "Własny runway na 6-12 miesięcy"
+    - "Oszacowany budżet projektu"
+    - "Plan finansowania"
