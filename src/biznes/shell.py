@@ -266,7 +266,8 @@ class ActionSystem:
             if company.cash_on_hand >= cost:
                 company.cash_on_hand -= cost
                 self.state.agreement_signed = True
-                return True, "Umowa wspólników podpisana!", {'cash': -cost}
+                self.state.founders_agreement.signed = True
+                return True, "Umowa wspólników podpisana!", {'cash': -cost, 'show_portfele': True}
             return False, f"Brak środków ({cost} PLN)", {}
         
         elif action_id == "develop_mvp":
@@ -701,17 +702,37 @@ Wpisz {colored('pomoc', Colors.GREEN)} aby zobaczyć komendy.
         company.founders.append(player)
         
         if self.config.has_partner:
-            partner = Founder(
-                name=self.config.partner_name,
-                role="business" if self.config.player_role == "technical" else "technical",
-                equity_percentage=self.config.partner_equity,
-                initial_investment=self.config.partner_capital,
-                experience_years=self.config.partner_experience_years,
-                krs_verified=self.config.partner_krs_verified,
-                debtor_registry_verified=self.config.partner_debts_verified,
-                is_player=False
-            )
-            company.founders.append(partner)
+            # Obsługa wielu wspólników
+            if hasattr(self, 'partners_data') and self.partners_data:
+                for p in self.partners_data:
+                    partner = Founder(
+                        name=p['name'],
+                        role=p.get('role', 'business' if self.config.player_role == "technical" else "technical"),
+                        equity_percentage=p.get('equity', self.config.partner_equity / len(self.partners_data)),
+                        initial_investment=p['capital'],
+                        personal_invested=p['capital'],
+                        experience_years=p['experience_years'],
+                        contacts_count=p['contacts_count'],
+                        krs_verified=p['krs_verified'],
+                        debtor_registry_verified=p['debts_verified'],
+                        is_player=False
+                    )
+                    company.founders.append(partner)
+            else:
+                # Fallback dla pojedynczego partnera
+                partner = Founder(
+                    name=self.config.partner_name,
+                    role="business" if self.config.player_role == "technical" else "technical",
+                    equity_percentage=self.config.partner_equity,
+                    initial_investment=self.config.partner_capital,
+                    personal_invested=self.config.partner_capital,
+                    experience_years=self.config.partner_experience_years,
+                    contacts_count=self.config.partner_contacts_count if hasattr(self.config, 'partner_contacts_count') else 0,
+                    krs_verified=self.config.partner_krs_verified,
+                    debtor_registry_verified=self.config.partner_debts_verified,
+                    is_player=False
+                )
+                company.founders.append(partner)
         
         self.game_state.company = company
         self.game_state.founders_agreement = FoundersAgreement()
@@ -909,6 +930,11 @@ Wpisz {colored('pomoc', Colors.GREEN)} aby zobaczyć komendy.
         if self._ask_yes_no("\nWykonać?", True):
             success, msg, effects = self.action_system.execute_action(action.id)
             print(colored(f"\n{'✓' if success else '✗'} {msg}", Colors.GREEN if success else Colors.RED))
+            
+            # Pokaż portfele przy podpisaniu SHA
+            if effects.get('show_portfele') and success:
+                print(colored("\n📋 PODSUMOWANIE FINANSOWE PRZY PODPISANIU SHA:", Colors.HEADER))
+                self.do_portfele("")
             
             # Zapisz do historii
             self.action_history.append({
