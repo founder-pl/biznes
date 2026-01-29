@@ -8,11 +8,12 @@ from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
 from textual.widgets import (
     Header, Footer, Static, Button, Label, 
-    ListItem, ListView, ProgressBar, Rule
+    ListItem, ListView, ProgressBar, Rule, Tree
 )
-from textual.screen import Screen
+from textual.widgets.tree import TreeNode
+from textual.screen import Screen, ModalScreen
 from textual.message import Message
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 import random
 
 from .core.models import (
@@ -193,12 +194,98 @@ class SetupScreen(Screen):
             self.app.pop_screen()
 
 
+class EventModal(ModalScreen):
+    """Modal dla losowych zdarzeń"""
+    
+    BINDINGS = [Binding("enter", "dismiss", "OK"), Binding("escape", "dismiss", "OK")]
+    
+    def __init__(self, event_type: str, name: str, desc: str, effect: str):
+        super().__init__()
+        self.event_type = event_type
+        self.event_name = name
+        self.event_desc = desc
+        self.event_effect = effect
+    
+    def compose(self) -> ComposeResult:
+        color_class = "event-positive" if self.event_type == "positive" else "event-negative"
+        yield Container(
+            Static(f"⚡ ZDARZENIE", classes="modal-title"),
+            Rule(),
+            Static(self.event_name, classes=color_class),
+            Static(self.event_desc, classes="event-desc"),
+            Static(""),
+            Static(f"Efekt: {self.event_effect}", classes="event-effect"),
+            Rule(),
+            Static("[Enter] OK", classes="modal-hint"),
+            classes="event-modal"
+        )
+    
+    def action_dismiss(self) -> None:
+        self.app.pop_screen()
+
+
+class RiskModal(ModalScreen):
+    """Modal dla analizy ryzyka"""
+    
+    BINDINGS = [Binding("escape", "dismiss", "Zamknij")]
+    
+    def __init__(self, game_state: GameState, config):
+        super().__init__()
+        self.game_state = game_state
+        self.config = config
+    
+    def compose(self) -> ComposeResult:
+        c = self.game_state.company
+        risks = []
+        score = 0
+        
+        runway = c.runway_months()
+        if runway < 3:
+            risks.append(("KRYTYCZNE", "Runway < 3 mies!"))
+            score += 40
+        elif runway < 6:
+            risks.append(("WYSOKIE", "Runway < 6 mies"))
+            score += 25
+        
+        if self.config.has_partner and not self.game_state.agreement_signed:
+            risks.append(("KRYTYCZNE", "Brak umowy wspólników!"))
+            score += 30
+        
+        if not c.registered and self.game_state.current_month > 3:
+            risks.append(("WYSOKIE", "Spółka niezarejestrowana"))
+            score += 15
+        
+        if not c.mvp_completed and self.game_state.current_month > 6:
+            risks.append(("ŚREDNIE", "MVP nieukończone po 6 mies"))
+            score += 10
+        
+        risk_color = "risk-low" if score < 30 else "risk-medium" if score < 60 else "risk-high"
+        
+        yield Container(
+            Static("📊 ANALIZA RYZYKA", classes="modal-title"),
+            Rule(),
+            Static(f"Poziom ryzyka: {score}/100", classes=risk_color),
+            Static(""),
+            *[Static(f"{'🔴' if r[0] == 'KRYTYCZNE' else '🟡' if r[0] == 'WYSOKIE' else '🟠'} {r[0]}: {r[1]}") for r in risks] if risks else [Static("✅ Brak krytycznych ryzyk")],
+            Rule(),
+            Button("← Zamknij", id="close"),
+            classes="risk-modal"
+        )
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.app.pop_screen()
+    
+    def action_dismiss(self) -> None:
+        self.app.pop_screen()
+
+
 class GameScreen(Screen):
     """Główny ekran gry"""
     
     BINDINGS = [
         Binding("m", "next_month", "Następny miesiąc"),
-        Binding("s", "status", "Status"),
+        Binding("r", "show_risk", "Ryzyko"),
+        Binding("g", "glossary", "Słownik"),
         Binding("f", "finanse", "Finanse"),
         Binding("e", "equity", "Equity"),
         Binding("h", "historia", "Historia"),
@@ -211,17 +298,21 @@ class GameScreen(Screen):
         self.action_history: List[Dict] = []
         self.actions_this_month = 0
         self.max_actions = 2
+        self.current_actions: List[Dict] = []
     
     def compose(self) -> ComposeResult:
         yield Header()
         yield Horizontal(
-            # Lewa kolumna - status
+            # Lewa kolumna - nawigacja drzewem + status
             Vertical(
+                Static("🧭 NAWIGACJA", classes="panel-title"),
+                Tree("Menu", id="nav-tree"),
+                Rule(),
                 Static("📊 STATUS", classes="panel-title"),
                 Static(id="status-panel", classes="status-content"),
                 classes="left-panel"
             ),
-            # Prawa kolumna - akcje
+            # Środkowa kolumna - akcje
             Vertical(
                 Static("⚡ AKCJE", classes="panel-title"),
                 ScrollableContainer(
@@ -229,6 +320,15 @@ class GameScreen(Screen):
                     id="actions-container"
                 ),
                 Static(id="actions-remaining", classes="actions-info"),
+                classes="center-panel"
+            ),
+            # Prawa kolumna - podgląd akcji
+            Vertical(
+                Static("🔍 PODGLĄD", classes="panel-title"),
+                ScrollableContainer(
+                    Static(id="action-preview", classes="preview-content"),
+                    id="preview-container"
+                ),
                 classes="right-panel"
             ),
             classes="game-layout"
@@ -237,7 +337,41 @@ class GameScreen(Screen):
     
     def on_mount(self) -> None:
         self._initialize_game()
+        self._setup_nav_tree()
         self._update_display()
+    
+    def _setup_nav_tree(self) -> None:
+        """Konfiguruje drzewo nawigacji"""
+        tree = self.query_one("#nav-tree", Tree)
+        tree.root.expand()
+        
+        info = tree.root.add("📋 Informacje")
+        info.add_leaf("💰 Finanse", data="finanse")
+        info.add_leaf("📊 Equity", data="equity")
+        info.add_leaf("📜 Historia", data="historia")
+        info.expand()
+        
+        tools = tree.root.add("🛠️ Narzędzia")
+        tools.add_leaf("⚠️ Ryzyko", data="risk")
+        tools.add_leaf("📚 Słownik", data="glossary")
+        tools.add_leaf("❓ Pomoc", data="help")
+        tools.expand()
+    
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        """Obsługa nawigacji drzewem"""
+        data = event.node.data
+        if data == "finanse":
+            self.action_finanse()
+        elif data == "equity":
+            self.action_equity()
+        elif data == "historia":
+            self.action_historia()
+        elif data == "risk":
+            self.action_show_risk()
+        elif data == "glossary":
+            self.action_glossary()
+        elif data == "help":
+            self.app.push_screen(HelpScreen())
     
     def _initialize_game(self) -> None:
         config = self.app.config
@@ -306,65 +440,175 @@ class GameScreen(Screen):
         actions_list = self.query_one("#actions-list", ListView)
         actions_list.clear()
         
-        actions = self._get_available_actions()
+        self.current_actions = self._get_available_actions()
         
-        for i, action in enumerate(actions):
+        for i, action in enumerate(self.current_actions):
             if action['available']:
-                label = f"{'[ZALECANE] ' if action.get('recommended') else ''}{action['name']}"
-                item = ListItem(Label(f"✓ {label}"), id=f"action-{i}")
+                rec = "⭐ " if action.get('recommended') else ""
+                item = ListItem(Label(f"✓ {rec}{action['name']}"), id=f"action-{i}")
             else:
-                item = ListItem(Label(f"✗ {action['name']} - {action.get('blocked', '')}"), id=f"action-{i}")
+                item = ListItem(Label(f"✗ {action['name']}"), id=f"action-{i}")
                 item.disabled = True
             actions_list.append(item)
         
         remaining = self.max_actions - self.actions_this_month
         self.query_one("#actions-remaining", Static).update(
-            f"Pozostało akcji: {remaining}/{self.max_actions}"
+            f"Pozostało akcji: {remaining}/{self.max_actions}  |  [M] nowy miesiąc"
         )
+        
+        # Wyczyść podgląd
+        self.query_one("#action-preview", Static).update("Wybierz akcję aby zobaczyć szczegóły...")
+    
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        """Pokazuje podgląd akcji przy nawigacji strzałkami"""
+        if not event.item or not event.item.id:
+            return
+        
+        if not event.item.id.startswith("action-"):
+            return
+        
+        idx = int(event.item.id.split("-")[1])
+        if idx < len(self.current_actions):
+            action = self.current_actions[idx]
+            self._show_action_preview(action)
+    
+    def _show_action_preview(self, action: Dict) -> None:
+        """Wyświetla podgląd akcji z ryzykami i korzyściami"""
+        preview = self.query_one("#action-preview", Static)
+        
+        lines = [f"[bold]{action['name']}[/bold]\n"]
+        
+        if action.get('description'):
+            lines.append(f"{action['description']}\n")
+        
+        if action.get('cost'):
+            lines.append(f"💰 Koszt: {action['cost']:,} PLN\n")
+        
+        if action.get('consequences'):
+            lines.append("[yellow]📋 KONSEKWENCJE:[/yellow]")
+            for c in action['consequences']:
+                lines.append(f"  • {c}")
+            lines.append("")
+        
+        if action.get('benefits'):
+            lines.append("[green]✓ KORZYŚCI:[/green]")
+            for b in action['benefits']:
+                lines.append(f"  • {b}")
+            lines.append("")
+        
+        if action.get('risks'):
+            lines.append("[red]⚠️ RYZYKA:[/red]")
+            for r in action['risks']:
+                lines.append(f"  • {r}")
+            lines.append("")
+        
+        if action.get('warning'):
+            lines.append(f"[bold red]{action['warning']}[/bold red]")
+        
+        if not action['available']:
+            lines.append(f"\n[dim]❌ {action.get('blocked', 'Niedostępne')}[/dim]")
+        elif action.get('recommended'):
+            lines.append("\n[bold green]⭐ ZALECANE[/bold green]")
+        
+        preview.update("\n".join(lines))
     
     def _get_available_actions(self) -> List[Dict]:
         c = self.game_state.company
+        month = self.game_state.current_month
         actions = []
         
+        # PRAWNE
         if not c.registered:
+            cost = 2000 if c.legal_form == LegalForm.PSA else 2500
             actions.append({
                 'id': 'register', 'name': '🏢 Załóż spółkę',
-                'available': True, 'recommended': True,
-                'cost': 2000
+                'description': f"Zarejestruj {c.legal_form.value.upper()} w KRS",
+                'available': c.cash_on_hand >= cost,
+                'blocked': f'Potrzebujesz {cost} PLN' if c.cash_on_hand < cost else '',
+                'recommended': month >= 1,
+                'cost': cost,
+                'consequences': [f"Koszt: {cost} PLN", "Czas: 1-2 tygodnie"],
+                'benefits': ["Ochrona prawna", "Możliwość pozyskania inwestora", "Profesjonalny wizerunek"],
+                'risks': ["Koszty księgowości (~500-1500 PLN/mies)"]
             })
         
         has_partner = len([f for f in c.founders if not f.is_player]) > 0
         if not self.game_state.agreement_signed:
             actions.append({
                 'id': 'sha', 'name': '📝 Podpisz SHA',
-                'available': has_partner,
-                'blocked': 'Brak partnera' if not has_partner else '',
+                'description': "Shareholders Agreement - umowa wspólników",
+                'available': has_partner and c.cash_on_hand >= 5000,
+                'blocked': 'Brak partnera' if not has_partner else 'Potrzebujesz 5000 PLN' if c.cash_on_hand < 5000 else '',
                 'recommended': has_partner,
-                'cost': 5000
+                'cost': 5000,
+                'consequences': ["Koszt prawnika: 3000-8000 PLN"],
+                'benefits': ["Jasne zasady vestingu", "Ochrona przed bad leaver", "Procedury rozwiązywania sporów"],
+                'risks': ["Bez umowy: KRYTYCZNE RYZYKO sporów!"],
+                'warning': "⚠️ BEZ UMOWY RYZYKUJESZ WSZYSTKO!" if has_partner else ""
             })
         
+        # PRODUKT
         if not c.mvp_completed:
             actions.append({
                 'id': 'mvp', 'name': '🔧 Rozwijaj MVP',
-                'available': True, 'recommended': True
+                'description': "Kontynuuj prace nad produktem",
+                'available': True,
+                'recommended': True,
+                'consequences': ["Postęp: +20-35%"],
+                'benefits': ["Przybliża do klientów", "Walidacja pomysłu"],
+                'risks': []
             })
         
-        if c.mvp_completed:
+        if c.mvp_completed or self.game_state.mvp_progress >= 100:
             actions.append({
                 'id': 'customers', 'name': '🎯 Szukaj klientów',
-                'available': True, 'recommended': c.paying_customers < 10
+                'description': "Aktywna sprzedaż i akwizycja",
+                'available': True,
+                'recommended': c.paying_customers < 10,
+                'consequences': ["Potencjał: 1-5 nowych klientów"],
+                'benefits': ["Walidacja produktu", "Wzrost MRR", "Feedback od użytkowników"],
+                'risks': ["Możliwe odrzucenia"]
             })
         
+        # FINANSOWE
         if c.registered and c.mrr > 0:
             actions.append({
                 'id': 'investor', 'name': '💰 Szukaj inwestora',
-                'available': self.game_state.agreement_signed,
-                'blocked': 'Najpierw SHA' if not self.game_state.agreement_signed else ''
+                'description': "Rozmowy z VC/aniołami biznesu",
+                'available': c.registered and self.game_state.agreement_signed,
+                'blocked': 'Najpierw SHA' if not self.game_state.agreement_signed else 'Zarejestruj spółkę' if not c.registered else '',
+                'consequences': ["Czas: 3-6 miesięcy", "Rozwodnienie 15-25%"],
+                'benefits': ["Kapitał na rozwój", "Kontakty i mentoring", "Walidacja przez smart money"],
+                'risks': ["Utrata kontroli", "Presja na szybki wzrost", "Due diligence"]
+            })
+        
+        if c.registered and c.cash_on_hand > 20000:
+            actions.append({
+                'id': 'hire', 'name': '👥 Zatrudnij pracownika',
+                'description': "Dodaj osobę do zespołu",
+                'available': True,
+                'consequences': ["Koszt: ~12000 PLN/mies"],
+                'benefits': ["Szybszy rozwój", "Nowe kompetencje"],
+                'risks': ["Zwiększony burn rate", "Zobowiązania prawne"]
+            })
+        
+        # SPECJALNE
+        if month > 6 and not c.product_market_fit and c.paying_customers < 5:
+            actions.append({
+                'id': 'pivot', 'name': '🔄 Rozważ pivot',
+                'description': "Zmień kierunek produktu",
+                'available': True,
+                'consequences': ["Reset części pracy", "Strata 40% postępu MVP"],
+                'benefits': ["Szansa na lepszy PMF", "Nowa perspektywa"],
+                'risks': ["Strata trakcji", "Strata klientów"],
+                'warning': "⚠️ 6+ mies bez PMF - rozważ zmianę kierunku"
             })
         
         actions.append({
             'id': 'skip', 'name': '⏭️ Pomiń (następny miesiąc)',
-            'available': True
+            'description': "Kontynuuj obecną strategię",
+            'available': True,
+            'consequences': ["Organiczny wzrost/spadek"]
         })
         
         return actions
@@ -378,10 +622,9 @@ class GameScreen(Screen):
             return
         
         idx = int(item_id.split("-")[1])
-        actions = self._get_available_actions()
         
-        if idx < len(actions):
-            action = actions[idx]
+        if idx < len(self.current_actions):
+            action = self.current_actions[idx]
             if action['available']:
                 self._execute_action(action)
     
@@ -397,23 +640,24 @@ class GameScreen(Screen):
             if c.cash_on_hand >= cost:
                 c.cash_on_hand -= cost
                 c.registered = True
-                self._log_action(action['name'], f"-{cost} PLN")
+                self._log_action(action['name'], f"-{cost} PLN, spółka zarejestrowana")
         
         elif action['id'] == 'sha':
             cost = action.get('cost', 5000)
             if c.cash_on_hand >= cost:
                 c.cash_on_hand -= cost
                 self.game_state.agreement_signed = True
-                self._log_action(action['name'], f"-{cost} PLN")
+                self.game_state.founders_agreement.signed = True
+                self._log_action(action['name'], f"-{cost} PLN, SHA podpisana")
         
         elif action['id'] == 'mvp':
             progress = random.randint(20, 35)
             self.game_state.mvp_progress = min(100, self.game_state.mvp_progress + progress)
             if self.game_state.mvp_progress >= 100:
                 c.mvp_completed = True
-                self._log_action(action['name'], "MVP ukończone!")
+                self._log_action(action['name'], "🎉 MVP ukończone!")
             else:
-                self._log_action(action['name'], f"+{progress}%")
+                self._log_action(action['name'], f"+{progress}% (teraz: {self.game_state.mvp_progress}%)")
         
         elif action['id'] == 'customers':
             new_customers = random.randint(1, 5)
@@ -421,14 +665,33 @@ class GameScreen(Screen):
             c.total_customers += new_customers
             c.paying_customers += new_customers
             c.mrr += new_customers * avg_mrr
-            self._log_action(action['name'], f"+{new_customers} klientów")
+            self._log_action(action['name'], f"+{new_customers} klientów, MRR +{new_customers * avg_mrr} PLN")
         
         elif action['id'] == 'investor':
             if random.random() < 0.3:
                 amount = random.randint(200, 500) * 1000
-                self._log_action(action['name'], f"Oferta: {amount:,} PLN!")
+                dilution = random.randint(15, 25)
+                c.cash_on_hand += amount
+                c.total_raised += amount
+                # Rozwodnienie
+                for f in c.founders:
+                    f.equity_percentage *= (1 - dilution/100)
+                c.esop_pool_percentage *= (1 - dilution/100)
+                self._log_action(action['name'], f"🎯 +{amount:,} PLN za {dilution}%")
             else:
-                self._log_action(action['name'], "Brak oferty")
+                self._log_action(action['name'], "Rozmowy trwają...")
+        
+        elif action['id'] == 'hire':
+            c.employees += 1
+            c.monthly_burn_rate += 12000
+            self._log_action(action['name'], "+1 pracownik, burn +12k/mies")
+        
+        elif action['id'] == 'pivot':
+            self.game_state.mvp_progress = max(30, self.game_state.mvp_progress - 40)
+            c.total_customers = c.total_customers // 2
+            c.paying_customers = c.paying_customers // 2
+            c.mrr = c.mrr // 2
+            self._log_action(action['name'], "Pivot! -40% MVP, -50% klientów")
         
         self.actions_this_month += 1
         self._update_display()
@@ -479,15 +742,40 @@ class GameScreen(Screen):
     
     def _random_event(self) -> None:
         c = self.game_state.company
+        month = self.game_state.current_month
+        
         events = [
-            ('positive', '🚀 Viral!', lambda: setattr(c, 'mrr', int(c.mrr * 1.2))),
-            ('positive', '🏆 Nagroda', lambda: setattr(c, 'cash_on_hand', c.cash_on_hand + 15000)),
-            ('negative', '💸 Konkurent', lambda: setattr(c, 'mrr', int(c.mrr * 0.9))),
-            ('negative', '🔧 Awaria', lambda: setattr(c, 'cash_on_hand', c.cash_on_hand - 3000)),
+            ('positive', '🚀 Viral marketing!', 'Twój post stał się viralowy!', lambda: (setattr(c, 'mrr', int(c.mrr * 1.2)), 'MRR +20%')[1]),
+            ('positive', '🏆 Nagroda branżowa', 'Wygrałeś konkurs startupowy!', lambda: (setattr(c, 'cash_on_hand', c.cash_on_hand + 15000), '+15000 PLN')[1]),
+            ('positive', '🤝 Strategiczny partner', 'Duża firma chce współpracować.', lambda: (setattr(c, 'mrr', c.mrr + 2000), 'MRR +2000 PLN')[1]),
+            ('negative', '💸 Konkurent z funding', 'Konkurent dostał rundę i obniża ceny.', lambda: (setattr(c, 'mrr', int(c.mrr * 0.9)), 'MRR -10%')[1]),
+            ('negative', '🔧 Awaria techniczna', 'Poważny bug wymagał naprawy.', lambda: (setattr(c, 'cash_on_hand', c.cash_on_hand - 3000), '-3000 PLN')[1]),
+            ('negative', '😤 Klient rezygnuje', 'Duży klient odszedł do konkurencji.', lambda: self._apply_churn()),
         ]
+        
+        # Zdarzenia kontekstowe
+        if self.app.config.has_partner and not self.game_state.agreement_signed and month > 3:
+            events.append(
+                ('negative', '⚔️ Konflikt z partnerem!', 'Spór o podział obowiązków i equity!', lambda: 'Podpisz SHA aby uniknąć!')
+            )
+        
         event = random.choice(events)
-        event[2]()
-        self._log_action(f"⚡ {event[1]}", event[0])
+        effect = event[3]()
+        self._log_action(f"⚡ {event[1]}", effect or event[0])
+        
+        # Pokaż modal
+        self.app.push_screen(EventModal(event[0], event[1], event[2], effect or ""))
+    
+    def _apply_churn(self) -> str:
+        c = self.game_state.company
+        if c.paying_customers > 0:
+            lost = min(2, c.paying_customers)
+            avg = c.mrr / c.paying_customers if c.paying_customers else 0
+            c.paying_customers -= lost
+            c.total_customers -= lost
+            c.mrr -= lost * avg
+            return f"-{lost} klientów"
+        return "Brak klientów do stracenia"
     
     def action_status(self) -> None:
         self._update_status()
@@ -500,6 +788,12 @@ class GameScreen(Screen):
     
     def action_historia(self) -> None:
         self.app.push_screen(HistoryScreen(self.action_history))
+    
+    def action_show_risk(self) -> None:
+        self.app.push_screen(RiskModal(self.game_state, self.app.config))
+    
+    def action_glossary(self) -> None:
+        self.app.push_screen(GlossaryScreen())
     
     def action_quit_game(self) -> None:
         self.app.pop_screen()
@@ -613,6 +907,52 @@ class HistoryScreen(Screen):
         self.app.pop_screen()
 
 
+class GlossaryScreen(Screen):
+    """Ekran słownika pojęć"""
+    
+    BINDINGS = [Binding("escape", "back", "Wróć")]
+    
+    TERMS = {
+        "MRR": "Monthly Recurring Revenue - miesięczny przychód powtarzalny",
+        "ARR": "Annual Recurring Revenue - roczny przychód powtarzalny (MRR × 12)",
+        "Runway": "Ile miesięcy firma może działać przy obecnym burn rate",
+        "Burn rate": "Miesięczne koszty operacyjne firmy",
+        "Vesting": "Stopniowe nabywanie udziałów w czasie (zwykle 48 mies)",
+        "Cliff": "Okres próbny przed vestingiem (zwykle 12 mies, 25%)",
+        "SHA": "Shareholders Agreement - umowa wspólników",
+        "Cap table": "Tabela kapitalizacji - kto ile ma udziałów",
+        "ESOP": "Employee Stock Option Pool - pula opcji dla pracowników",
+        "Good leaver": "Odejście w dobrych okolicznościach - zachowuje vested",
+        "Bad leaver": "Odejście w złych okolicznościach - traci wszystko/większość",
+        "Tag-along": "Prawo mniejszościowego do dołączenia do sprzedaży",
+        "Drag-along": "Prawo większościowego do zmuszenia do sprzedaży",
+        "PMF": "Product-Market Fit - dopasowanie produktu do rynku",
+        "PSA": "Prosta Spółka Akcyjna - nowa forma prawna dla startupów",
+        "Due diligence": "Audyt prawny/finansowy przed inwestycją",
+    }
+    
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Container(
+            Static("📚 SŁOWNIK POJĘĆ", classes="screen-title"),
+            Rule(),
+            ScrollableContainer(
+                *[Static(f"[bold]{term}[/bold]: {desc}") for term, desc in self.TERMS.items()],
+                id="glossary-content"
+            ),
+            Rule(),
+            Button("← Wróć", id="back"),
+            classes="glossary-box"
+        )
+        yield Footer()
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.app.pop_screen()
+    
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+
 class HelpScreen(Screen):
     """Ekran pomocy"""
     
@@ -627,14 +967,23 @@ class HelpScreen(Screen):
             Static("  ↑↓ - wybór opcji"),
             Static("  Enter - zatwierdź"),
             Static("  Esc - wróć"),
+            Static("  Tab - przełącz panele"),
             Static(""),
             Static("[bold]Skróty w grze:[/bold]"),
             Static("  M - następny miesiąc"),
-            Static("  S - status"),
+            Static("  R - analiza ryzyka"),
             Static("  F - finanse"),
             Static("  E - equity/cap table"),
+            Static("  G - słownik pojęć"),
             Static("  H - historia"),
             Static("  Q - wyjście"),
+            Static(""),
+            Static("[bold]Panel nawigacji (lewy):[/bold]"),
+            Static("  Kliknij lub użyj strzałek do nawigacji"),
+            Static(""),
+            Static("[bold]Panel podglądu (prawy):[/bold]"),
+            Static("  Pokazuje szczegóły wybranej akcji"),
+            Static("  Ryzyka, korzyści, konsekwencje"),
             Rule(),
             Button("← Wróć", id="back"),
             classes="info-box"
@@ -720,20 +1069,42 @@ class BiznesApp(App):
     .status-content { padding: 1; }
     .actions-info { text-align: center; color: $warning; padding: 1; }
     .learn-header { text-style: bold; }
+    .preview-content { padding: 1; }
     
     .welcome-box { align: center middle; width: 50; height: auto; border: solid $primary; padding: 2; }
     .setup-box { align: center middle; width: 60; height: auto; border: solid $secondary; padding: 2; }
-    .info-box { align: center middle; width: 50; height: auto; border: solid $primary; padding: 2; }
+    .info-box { align: center middle; width: 60; height: auto; border: solid $primary; padding: 2; }
     .gameover-box { align: center middle; width: 50; height: auto; border: solid $error; padding: 2; }
+    .glossary-box { align: center middle; width: 70; height: 80%; border: solid $primary; padding: 2; }
     
     .game-layout { height: 100%; }
-    .left-panel { width: 35%; border-right: solid $primary; }
-    .right-panel { width: 65%; }
+    .left-panel { width: 25%; border-right: solid $primary; }
+    .center-panel { width: 40%; border-right: solid $secondary; }
+    .right-panel { width: 35%; }
     
     #actions-container { height: 1fr; }
+    #preview-container { height: 1fr; }
+    #glossary-content { height: 1fr; }
+    #nav-tree { height: auto; max-height: 10; }
+    
+    /* Event modal */
+    .event-modal { align: center middle; width: 50; height: auto; border: double $warning; padding: 2; background: $surface; }
+    .modal-title { text-style: bold; text-align: center; }
+    .modal-hint { text-align: center; color: $text-muted; }
+    .event-positive { color: $success; text-style: bold; }
+    .event-negative { color: $error; text-style: bold; }
+    .event-desc { color: $text; padding: 1 0; }
+    .event-effect { color: $warning; }
+    
+    /* Risk modal */
+    .risk-modal { align: center middle; width: 55; height: auto; border: solid $error; padding: 2; background: $surface; }
+    .risk-low { color: $success; text-style: bold; }
+    .risk-medium { color: $warning; text-style: bold; }
+    .risk-high { color: $error; text-style: bold; }
     
     Button { margin: 1 0; }
-    ListView { height: auto; max-height: 15; }
+    ListView { height: auto; max-height: 12; }
+    Tree { height: auto; }
     """
     
     TITLE = "BIZNES - Symulator Startupu"

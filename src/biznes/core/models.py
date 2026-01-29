@@ -78,8 +78,13 @@ class Founder:
     runway_months: int = 0
     commitment_hours_weekly: int = 0
     has_other_job: bool = False
+    # Portfel osobisty foundera
+    personal_cash: float = 0.0  # Gotówka osobista
+    personal_invested: float = 0.0  # Ile zainwestował w firmę
+    total_received: float = 0.0  # Ile otrzymał z firmy (wypłaty)
+    contacts_count: int = 0  # Ile kontaktów wniósł
+    mvp_value: float = 0.0  # Wartość wniesionego MVP
     brought_mvp: bool = False
-    mvp_value: float = 0.0
     background_ip: List[str] = field(default_factory=list)
     
     # Flagi weryfikacji

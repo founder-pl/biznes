@@ -397,6 +397,7 @@ Wpisz {colored('pomoc', Colors.GREEN)} aby zobaczyć komendy.
             f"{colored('historia', Colors.GREEN)}   - Historia decyzji",
             "",
             f"{colored('finanse', Colors.GREEN)}    - Szczegóły finansowe",
+            f"{colored('portfele', Colors.GREEN)}   - Portfele wspólników + biznes",
             f"{colored('equity', Colors.GREEN)}     - Podział udziałów",
             f"{colored('ryzyko', Colors.GREEN)}     - Analiza ryzyka",
             "",
