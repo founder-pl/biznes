@@ -15,15 +15,26 @@ Interaktywna gra edukacyjna o zakładaniu firmy w Polsce. Naucz się vestingu, u
 ## 🎮 Szybki start
 
 ```bash
-# Instalacja
+# Instalacja (wersja tekstowa)
 pip install -e .
 
-# Uruchomienie
+# Instalacja z TUI (nawigacja strzałkami)
+pip install -e ".[tui]"
+
+# Uruchomienie - wersja tekstowa
 biznes
 
-# Lub bezpośrednio
-python -m biznes
+# Uruchomienie - wersja TUI (strzałki, Enter, bez pisania)
+biznes-tui
 ```
+
+### 🖥️ Tryb TUI (Textual)
+
+Nowy tryb z pełną nawigacją klawiaturą:
+- **↑↓** - wybór opcji
+- **Enter** - zatwierdź
+- **Esc** - wróć
+- **M/S/F/E/H/Q** - skróty klawiszowe
 
 ## 📋 Komendy
 
