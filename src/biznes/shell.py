@@ -328,7 +328,11 @@ class BiznesShell(cmd.Cmd):
     intro = ""  # Ustawiamy dynamicznie w preloop
     
     def preloop(self):
-        """Wyświetla intro z informacją o zapisanych grach"""
+        """Wyświetla intro z menu numerycznym"""
+        self._show_main_menu()
+    
+    def _show_main_menu(self):
+        """Wyświetla główne menu z opcjami numerycznymi"""
         saves = self._get_saved_games()
         
         print(colored('═'*60, Colors.CYAN))
@@ -337,14 +341,35 @@ class BiznesShell(cmd.Cmd):
         print(colored('═'*60, Colors.CYAN))
         print()
         
-        if saves:
-            print(colored(f"📂 Znaleziono {len(saves)} zapisanych gier.", Colors.YELLOW))
-            print(f"   Wpisz {colored('wczytaj', Colors.GREEN)} aby kontynuować.")
-            print()
+        print(colored("  MENU:", Colors.BOLD))
+        print(f"  {colored('1', Colors.GREEN)}. Nowa gra")
         
-        print(f"Wpisz {colored('start', Colors.GREEN)} aby rozpocząć nową grę.")
-        print(f"Wpisz {colored('pomoc', Colors.GREEN)} aby zobaczyć komendy.")
+        if saves:
+            print(f"  {colored('2', Colors.GREEN)}. Wczytaj grę ({len(saves)} zapisów)")
+        else:
+            print(f"  {colored('2', Colors.DIM)}. Wczytaj grę (brak zapisów)")
+        
+        print(f"  {colored('3', Colors.GREEN)}. Pomoc")
+        print(f"  {colored('0', Colors.GREEN)}. Wyjście")
         print()
+    
+    def default(self, line):
+        """Obsługuje nieznane komendy i wybór numeryczny"""
+        line = line.strip()
+        
+        # Obsługa menu numerycznego gdy nie ma aktywnej gry
+        if not self.game_state and line in ['1', '2', '3', '0']:
+            if line == '1':
+                self.do_start("")
+            elif line == '2':
+                self.do_wczytaj("")
+            elif line == '3':
+                self.do_pomoc("")
+            elif line == '0':
+                return self.do_wyjscie("")
+            return
+        
+        print(f"Nieznana komenda: {line}. Wpisz 'pomoc' lub '3'.")
     
     prompt = colored("biznes> ", Colors.GREEN)
     
@@ -403,6 +428,7 @@ class BiznesShell(cmd.Cmd):
         """Wyświetla pomoc"""
         help_text = [
             f"{colored('start', Colors.GREEN)}      - Rozpocznij nową grę",
+            f"{colored('wczytaj', Colors.GREEN)}    - Wczytaj zapisaną grę",
             f"{colored('status', Colors.GREEN)}     - Stan firmy",
             f"{colored('miesiac', Colors.GREEN)}    - Następny miesiąc + akcje",
             f"{colored('akcje', Colors.GREEN)}      - Dostępne akcje",
@@ -1314,6 +1340,100 @@ class BiznesShell(cmd.Cmd):
         ]
         print_box("SŁOWNIK", terms)
     
+    def _get_saved_games(self) -> List[Dict]:
+        """Zwraca listę zapisanych gier"""
+        saves = []
+        if self.save_dir.exists():
+            for f in sorted(self.save_dir.glob("*.yaml"), reverse=True):
+                try:
+                    with open(f) as file:
+                        data = yaml.safe_load(file) if yaml else {}
+                        saves.append({
+                            'path': f,
+                            'name': f.stem,
+                            'data': data,
+                            'modified': datetime.fromtimestamp(f.stat().st_mtime)
+                        })
+                except Exception:
+                    pass
+        return saves
+    
+    def do_wczytaj(self, arg):
+        """Wczytaj zapisaną grę"""
+        saves = self._get_saved_games()
+        
+        if not saves:
+            print(colored("Brak zapisanych gier.", Colors.YELLOW))
+            return
+        
+        print(colored("\n" + "═"*60, Colors.CYAN))
+        print(colored("  📂 ZAPISANE GRY", Colors.HEADER))
+        print(colored("═"*60, Colors.CYAN))
+        
+        for i, save in enumerate(saves[:10], 1):  # Max 10 zapisów
+            data = save['data']
+            month = data.get('month', '?')
+            cash = data.get('cash', 0)
+            mrr = data.get('mrr', 0)
+            player = data.get('player_name', 'Nieznany')
+            modified = save['modified'].strftime('%Y-%m-%d %H:%M')
+            
+            print(f"\n  {colored(str(i), Colors.GREEN)}. {save['name']}")
+            print(f"     👤 {player} | Miesiąc {month}")
+            print(f"     💰 {cash:,.0f} PLN | MRR: {mrr:,.0f} PLN")
+            print(f"     📅 {modified}")
+        
+        print(colored("\n" + "─"*60, Colors.CYAN))
+        choice = self._ask("Wybierz numer (lub Enter aby anulować)", "")
+        
+        if not choice:
+            return
+        
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(saves):
+                self._load_game(saves[idx])
+            else:
+                print(colored("Nieprawidłowy numer.", Colors.RED))
+        except ValueError:
+            print(colored("Wprowadź numer.", Colors.RED))
+    
+    def _load_game(self, save: Dict):
+        """Wczytuje grę z zapisu"""
+        data = save['data']
+        
+        # Odtwórz konfigurację
+        self.config = PlayerConfig()
+        self.config.player_name = data.get('player_name', 'Founder')
+        self.config.player_role = data.get('player_role', 'technical')
+        self.config.has_partner = data.get('has_partner', False)
+        self.config.partner_name = data.get('partner_name', '')
+        self.config.player_equity = data.get('player_equity', 50)
+        self.config.partner_equity = data.get('partner_equity', 40)
+        self.config.esop_pool = data.get('esop_pool', 10)
+        self.config.legal_form = data.get('legal_form', 'psa')
+        self.config.initial_cash = data.get('cash', 10000)
+        self.config.monthly_burn = data.get('burn', 5000)
+        
+        # Odtwórz stan gry
+        self._initialize_game()
+        
+        # Nadpisz wartości z zapisu
+        self.game_state.current_month = data.get('month', 0)
+        self.game_state.company.cash_on_hand = data.get('cash', 10000)
+        self.game_state.company.mrr = data.get('mrr', 0)
+        self.game_state.company.paying_customers = data.get('customers', 0)
+        self.game_state.company.total_customers = data.get('customers', 0)
+        self.game_state.company.registered = data.get('registered', False)
+        self.game_state.company.mvp_completed = data.get('mvp_completed', False)
+        self.game_state.agreement_signed = data.get('agreement_signed', False)
+        self.game_state.mvp_progress = data.get('mvp_progress', 0)
+        
+        print(colored(f"\n✓ Wczytano grę: {save['name']}", Colors.GREEN))
+        print(f"   Miesiąc: {self.game_state.current_month}")
+        print(f"   Gotówka: {self.game_state.company.cash_on_hand:,.0f} PLN")
+        print(colored("\nWpisz 'miesiac' aby kontynuować grę.", Colors.YELLOW))
+    
     def do_zapisz(self, arg):
         """Zapisz grę"""
         if not self.game_state:
@@ -1321,16 +1441,33 @@ class BiznesShell(cmd.Cmd):
         name = arg or f"save_{datetime.now().strftime('%Y%m%d_%H%M')}"
         path = self.save_dir / f"{name}.yaml"
         
+        # Zapisz pełny stan gry
         data = {
+            'player_name': self.config.player_name,
+            'player_role': self.config.player_role,
+            'has_partner': self.config.has_partner,
+            'partner_name': self.config.partner_name,
+            'player_equity': self.config.player_equity,
+            'partner_equity': self.config.partner_equity,
+            'esop_pool': self.config.esop_pool,
+            'legal_form': self.config.legal_form,
             'month': self.game_state.current_month,
             'cash': self.game_state.company.cash_on_hand,
             'mrr': self.game_state.company.mrr,
-            'customers': self.game_state.company.paying_customers
+            'burn': self.game_state.company.monthly_burn_rate,
+            'customers': self.game_state.company.paying_customers,
+            'registered': self.game_state.company.registered,
+            'mvp_completed': self.game_state.company.mvp_completed,
+            'agreement_signed': self.game_state.agreement_signed,
+            'mvp_progress': self.game_state.mvp_progress,
         }
         
-        with open(path, 'w') as f:
-            yaml.dump(data, f)
-        print(colored(f"✓ Zapisano: {path}", Colors.GREEN))
+        if yaml:
+            with open(path, 'w') as f:
+                yaml.dump(data, f)
+            print(colored(f"✓ Zapisano: {path}", Colors.GREEN))
+        else:
+            print(colored("Brak modułu yaml - zapis niedostępny.", Colors.RED))
 
 
 def main():
