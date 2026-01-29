@@ -7,7 +7,10 @@ Wersja 2.0 - Pełna interaktywność z menu akcji
 import cmd
 import os
 import sys
-import yaml
+try:
+    import yaml
+except ImportError:
+    yaml = None
 import random
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
@@ -343,6 +346,7 @@ Wpisz {colored('pomoc', Colors.GREEN)} aby zobaczyć komendy.
         self.action_history: List[Dict] = []
         self.actions_this_month: int = 0
         self.max_actions_per_month: int = 2
+        self.partners_data: List[Dict] = []  # Dane wielu wspólników
     
     def _ask(self, prompt: str, default: str = "") -> str:
         if default:
@@ -460,68 +464,183 @@ Wpisz {colored('pomoc', Colors.GREEN)} aby zobaczyć komendy.
             self.config.mvp_calculated_value = 0
             print(colored("💡 Bez MVP zaczynasz od zera. Priorytet: zbuduj prototyp.", Colors.YELLOW))
         
-        # ETAP 3: Partner
-        print(colored("\n\nETAP 3/6: Partner", Colors.HEADER))
+        # ETAP 3: Partnerzy (wspólnicy)
+        print(colored("\n\nETAP 3/6: Wspólnicy", Colors.HEADER))
         has_partner = self._ask_yes_no("Masz partnera/co-foundera?", False)
         self.config.has_partner = has_partner
         
+        # Lista partnerów do obsługi wielu wspólników
+        self.partners_data = []
+        
         if has_partner:
-            self.config.partner_name = self._ask("Imię partnera", "Partner")
+            partner_num = 1
+            adding_partners = True
             
-            print(colored("\n🔍 WERYFIKACJA PARTNERA:", Colors.YELLOW))
-            self.config.partner_krs_verified = self._ask_yes_no("Sprawdziłeś w KRS?", False)
-            if not self.config.partner_krs_verified:
-                print(colored("   ⚠️ RYZYKO: Możesz nie wiedzieć o upadłościach!", Colors.RED))
+            while adding_partners:
+                print(colored(f"\n{'─'*40}", Colors.CYAN))
+                print(colored(f"  👤 WSPÓLNIK #{partner_num}", Colors.HEADER))
+                print(colored("─"*40, Colors.CYAN))
+                
+                partner = {
+                    'name': self._ask(f"Imię wspólnika #{partner_num}", f"Partner{partner_num}"),
+                    'role': 'business' if self.config.player_role == 'technical' else 'technical',
+                    'capital': 0,
+                    'experience_years': 0,
+                    'contacts_count': 0,
+                    'krs_verified': False,
+                    'debts_verified': False
+                }
+                
+                print(colored("\n  🔍 WERYFIKACJA:", Colors.YELLOW))
+                partner['krs_verified'] = self._ask_yes_no("  Sprawdziłeś w KRS?", False)
+                if not partner['krs_verified']:
+                    print(colored("     ⚠️ RYZYKO: Możesz nie wiedzieć o upadłościach!", Colors.RED))
+                
+                partner['debts_verified'] = self._ask_yes_no("  Sprawdziłeś rejestry dłużników?", False)
+                if not partner['debts_verified']:
+                    print(colored("     ⚠️ RYZYKO: Partner może mieć długi!", Colors.RED))
+                
+                partner['capital'] = self._ask_number("  Kapitał wnoszony (PLN)", 0, 1000000, 0)
+                partner['experience_years'] = int(self._ask_number("  Doświadczenie (lata)", 0, 30, 0))
+                
+                has_contacts = self._ask_yes_no("  Ma klientów/kontakty?", False)
+                if has_contacts:
+                    partner['contacts_count'] = int(self._ask_number("  Ile kontaktów/leadów wnosi?", 1, 500, 10))
+                    print(colored(f"     ✓ Wnosi {partner['contacts_count']} potencjalnych kontaktów", Colors.GREEN))
+                
+                self.partners_data.append(partner)
+                
+                # Podsumowanie wspólnika
+                print(colored(f"\n  ✓ Dodano: {partner['name']}", Colors.GREEN))
+                print(f"     Kapitał: {partner['capital']:,.0f} PLN")
+                print(f"     Doświadczenie: {partner['experience_years']} lat")
+                print(f"     Kontakty: {partner['contacts_count']}")
+                
+                partner_num += 1
+                if partner_num <= 4:  # Max 4 wspólników
+                    adding_partners = self._ask_yes_no("\n  Dodać kolejnego wspólnika?", False)
+                else:
+                    print(colored("\n  ℹ️ Maksymalna liczba wspólników: 4", Colors.YELLOW))
+                    adding_partners = False
             
-            self.config.partner_debts_verified = self._ask_yes_no("Sprawdziłeś rejestry dłużników?", False)
-            if not self.config.partner_debts_verified:
-                print(colored("   ⚠️ RYZYKO: Partner może mieć długi!", Colors.RED))
+            # Zachowaj kompatybilność z pojedynczym partnerem
+            if self.partners_data:
+                first = self.partners_data[0]
+                self.config.partner_name = first['name']
+                self.config.partner_capital = first['capital']
+                self.config.partner_experience_years = first['experience_years']
+                self.config.partner_contacts_count = first['contacts_count']
+                self.config.partner_krs_verified = first['krs_verified']
+                self.config.partner_debts_verified = first['debts_verified']
+                self.config.partner_has_customers = first['contacts_count'] > 0
             
-            self.config.partner_capital = self._ask_number("Kapitał partnera (PLN)", 0, 1000000, 0)
-            self.config.partner_experience_years = int(self._ask_number("Doświadczenie (lata)", 0, 30, 0))
-            self.config.partner_has_customers = self._ask_yes_no("Ma klientów/kontakty?", False)
+            # Equity - kalkulacja i uzasadnienie dla wielu wspólników
+            print(colored("\n" + "─"*60, Colors.CYAN))
+            print(colored("  📊 REKOMENDACJA PODZIAŁU EQUITY", Colors.HEADER))
+            print(colored("─"*60, Colors.CYAN))
             
-            if self.config.partner_has_customers:
-                self.config.partner_contacts_count = int(self._ask_number("Ile kontaktów/leadów wnosi?", 1, 500, 10))
-                print(colored(f"   ✓ Partner wnosi {self.config.partner_contacts_count} potencjalnych kontaktów", Colors.GREEN))
-            else:
-                self.config.partner_contacts_count = 0
+            num_partners = len(self.partners_data)
+            total_founders = num_partners + 1  # +1 dla gracza
             
-            # Equity
-            print(colored("\n📊 REKOMENDACJA EQUITY:", Colors.HEADER))
-            player_base, partner_base = 50, 50
-            
-            if self.config.mvp_calculated_value > 0:
-                mvp_bonus = min(20, self.config.mvp_calculated_value / 5000)
-                player_base += mvp_bonus
-                partner_base -= mvp_bonus
-                print(f"   MVP: +{mvp_bonus:.0f}% dla Ciebie")
-            
-            if self.config.partner_capital > 0:
-                cap_bonus = min(15, self.config.partner_capital / 5000)
-                partner_base += cap_bonus
-                player_base -= cap_bonus
-                print(f"   Kapitał: +{cap_bonus:.0f}% dla partnera")
-            
-            if self.config.partner_contacts_count > 0:
-                contacts_bonus = min(10, self.config.partner_contacts_count / 5)
-                partner_base += contacts_bonus
-                player_base -= contacts_bonus
-                print(f"   Kontakty ({self.config.partner_contacts_count}): +{contacts_bonus:.0f}% dla partnera")
-            
+            # Bazowy podział równy
             esop = 10
-            self.config.player_equity = player_base - esop/2
-            self.config.partner_equity = partner_base - esop/2
+            available = 100 - esop
+            base_share = available / total_founders
+            
+            player_base = base_share
+            partner_shares = {p['name']: base_share for p in self.partners_data}
+            reasons = []
+            
+            print(colored("\n  📖 ZASADA WYJŚCIOWA:", Colors.BOLD))
+            print(f"     {total_founders} founderów → {base_share:.0f}% każdy jako baza")
+            print(f"     (po odjęciu {esop}% ESOP)\n")
+            
+            print(colored("  📈 MODYFIKATORY:", Colors.BOLD))
+            
+            # Bonus za MVP dla gracza
+            if self.config.mvp_calculated_value > 0:
+                mvp_bonus = min(15, self.config.mvp_calculated_value / 5000)
+                player_base += mvp_bonus
+                # Odejmij proporcjonalnie od partnerów
+                per_partner_penalty = mvp_bonus / num_partners
+                for name in partner_shares:
+                    partner_shares[name] -= per_partner_penalty
+                print(f"     • MVP ({self.config.mvp_calculated_value:,.0f} PLN): +{mvp_bonus:.0f}% dla Ciebie")
+                reasons.append(f"Twój MVP wart {self.config.mvp_calculated_value:,.0f} PLN")
+            
+            # Bonusy dla partnerów
+            for p in self.partners_data:
+                name = p['name']
+                
+                if p['capital'] > 0:
+                    cap_bonus = min(10, p['capital'] / 5000)
+                    partner_shares[name] += cap_bonus
+                    player_base -= cap_bonus / num_partners
+                    print(f"     • {name} - kapitał ({p['capital']:,.0f} PLN): +{cap_bonus:.0f}%")
+                    reasons.append(f"{name} wnosi {p['capital']:,.0f} PLN")
+                
+                if p['contacts_count'] > 0:
+                    contacts_bonus = min(8, p['contacts_count'] / 5)
+                    partner_shares[name] += contacts_bonus
+                    player_base -= contacts_bonus / num_partners
+                    print(f"     • {name} - kontakty ({p['contacts_count']}): +{contacts_bonus:.0f}%")
+                    reasons.append(f"{name} ma {p['contacts_count']} kontaktów")
+                
+                if p['experience_years'] > 5:
+                    exp_bonus = min(5, p['experience_years'] / 4)
+                    partner_shares[name] += exp_bonus
+                    player_base -= exp_bonus / num_partners
+                    print(f"     • {name} - doświadczenie ({p['experience_years']} lat): +{exp_bonus:.0f}%")
+            
+            # Wyjaśnienie ESOP
+            print(colored("\n  💡 CO TO JEST ESOP?", Colors.BOLD))
+            print("     Employee Stock Option Pool - pula udziałów dla przyszłych")
+            print("     pracowników. Standard: 10-15%. Motywuje zespół i jest")
+            print("     wymagany przez większość inwestorów VC.")
+            
+            # Podsumowanie
+            print(colored("\n  ══════════════════════════════════════", Colors.CYAN))
+            print(colored("  PROPONOWANY PODZIAŁ:", Colors.BOLD))
+            print(colored("  ══════════════════════════════════════", Colors.CYAN))
+            
+            print(colored(f"\n     👤 Ty ({self.config.player_name}): {player_base:.0f}%", Colors.GREEN))
+            total_partners_equity = 0
+            for p in self.partners_data:
+                share = partner_shares[p['name']]
+                total_partners_equity += share
+                verified = "✓" if p['krs_verified'] and p['debts_verified'] else "⚠️"
+                print(f"     👥 {p['name']}: {share:.0f}% {verified}")
+            print(colored(f"     🎁 ESOP (pracownicy): {esop}%", Colors.YELLOW))
+            print(f"     ─────────────────────────────")
+            total = player_base + total_partners_equity + esop
+            print(f"     Σ  RAZEM: {total:.0f}%")
+            
+            if reasons:
+                print(colored("\n  📋 UZASADNIENIE:", Colors.BOLD))
+                for r in reasons:
+                    print(f"     • {r}")
+            
+            # Zapisz wartości
+            self.config.player_equity = player_base
+            self.config.partner_equity = total_partners_equity
             self.config.esop_pool = esop
             
-            print(colored(f"\n   Ty: {self.config.player_equity:.0f}%", Colors.GREEN))
-            print(f"   Partner: {self.config.partner_equity:.0f}%")
-            print(f"   ESOP: {esop}%")
+            # Przypisz equity do partnerów
+            for i, p in enumerate(self.partners_data):
+                p['equity'] = partner_shares[p['name']]
             
-            if not self._ask_yes_no("Akceptujesz?", True):
+            print("")
+            if not self._ask_yes_no("Akceptujesz ten podział?", True):
+                print(colored("\n  Wprowadź własny podział:", Colors.YELLOW))
                 self.config.player_equity = self._ask_number("Twój udział %", 1, 95, player_base)
-                self.config.partner_equity = self._ask_number("Udział partnera %", 1, 95, partner_base)
+                remaining = 100 - self.config.player_equity - esop
+                for p in self.partners_data:
+                    suggested = remaining / len(self.partners_data)
+                    p['equity'] = self._ask_number(f"Udział {p['name']} %", 1, 90, suggested)
+                    remaining -= p['equity']
+                self.config.partner_equity = sum(p['equity'] for p in self.partners_data)
                 self.config.esop_pool = 100 - self.config.player_equity - self.config.partner_equity
+                print(colored(f"     ESOP: {self.config.esop_pool:.0f}%", Colors.DIM))
         else:
             self.config.player_equity = 90
             self.config.partner_equity = 0
@@ -747,7 +866,7 @@ Wpisz {colored('pomoc', Colors.GREEN)} aby zobaczyć komendy.
                     else:
                         print(f"  {colored('✗', Colors.RED)} {a.name} - {a.blocked_reason}")
         
-        print(colored("\n─"*60, Colors.CYAN))
+        print(colored("\n" + "─"*60, Colors.CYAN))
         remaining = self.max_actions_per_month - self.actions_this_month
         print(colored(f"  Pozostało akcji w tym miesiącu: {remaining}", Colors.YELLOW))
         
