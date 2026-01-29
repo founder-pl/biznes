@@ -1126,6 +1126,86 @@ Wpisz {colored('pomoc', Colors.GREEN)} aby zobaczyć komendy.
             f"Wycena: {c.current_valuation:,.0f} PLN"
         ])
     
+    def do_portfele(self, arg):
+        """Portfele wspólników i biznesu - przejrzystość finansowa"""
+        if not self.game_state:
+            print(colored("Najpierw 'start'", Colors.RED))
+            return
+        
+        c = self.game_state.company
+        month = self.game_state.current_month
+        
+        print(colored("\n" + "═"*60, Colors.CYAN))
+        print(colored("  💼 PRZEJRZYSTOŚĆ FINANSOWA", Colors.HEADER))
+        print(colored("═"*60, Colors.CYAN))
+        
+        # Sekcja 1: Portfele indywidualne
+        print(colored("\n┌─ PORTFELE WSPÓLNIKÓW ─────────────────────────────────────┐", Colors.CYAN))
+        
+        for f in c.founders:
+            verified = "✓" if f.krs_verified and f.debtor_registry_verified else "⚠️"
+            print(colored(f"\n  👤 {f.name} {verified}", Colors.BOLD))
+            print(f"     ├─ Equity: {f.equity_percentage:.0f}% (vested: {f.vested_percentage:.1f}%)")
+            print(f"     ├─ Zainwestowane: {f.personal_invested:,.0f} PLN")
+            print(f"     ├─ Otrzymane z firmy: {f.total_received:,.0f} PLN")
+            
+            # Wkłady niefinansowe
+            contributions = []
+            if f.mvp_value > 0:
+                contributions.append(f"MVP: {f.mvp_value:,.0f} PLN")
+            if f.contacts_count > 0:
+                contributions.append(f"Kontakty: {f.contacts_count}")
+            if f.experience_years > 0:
+                contributions.append(f"Doświadczenie: {f.experience_years} lat")
+            
+            if contributions:
+                print(f"     ├─ Wkłady: {', '.join(contributions)}")
+            
+            # Bilans osobisty
+            balance = f.total_received - f.personal_invested
+            balance_color = Colors.GREEN if balance >= 0 else Colors.RED
+            print(f"     └─ Bilans: {colored(f'{balance:+,.0f} PLN', balance_color)}")
+        
+        print(colored("\n└──────────────────────────────────────────────────────────┘", Colors.CYAN))
+        
+        # Sekcja 2: Finanse biznesu
+        print(colored("\n┌─ FINANSE BIZNESU ────────────────────────────────────────┐", Colors.CYAN))
+        print(f"\n  💰 STAN KONTA FIRMOWEGO")
+        print(f"     ├─ Gotówka: {c.cash_on_hand:,.0f} PLN")
+        print(f"     ├─ MRR: {c.mrr:,.0f} PLN")
+        print(f"     ├─ Burn rate: {c.monthly_burn_rate:,.0f} PLN/mies")
+        print(f"     └─ Runway: {c.runway_months()} mies")
+        
+        # Sekcja 3: Miesięczny P&L
+        profit = c.mrr - c.monthly_burn_rate
+        profit_color = Colors.GREEN if profit >= 0 else Colors.RED
+        
+        print(colored("\n  📊 MIESIĘCZNY RACHUNEK ZYSKÓW I STRAT", Colors.BOLD))
+        print(colored("     ┌────────────────────────────────────┐", Colors.DIM))
+        print(f"     │ {colored('PRZYCHODY:', Colors.GREEN)}")
+        print(f"     │   MRR (klienci):      {c.mrr:>10,.0f} PLN")
+        print(f"     │ ───────────────────────────────────")
+        print(f"     │ {colored('KOSZTY:', Colors.RED)}")
+        print(f"     │   Burn rate:          {c.monthly_burn_rate:>10,.0f} PLN")
+        if c.employees > 0:
+            print(f"     │     (w tym pensje:   ~{c.employees * 8000:>9,.0f} PLN)")
+        print(f"     │ ───────────────────────────────────")
+        print(f"     │ {colored('WYNIK:', profit_color)} {profit:>21,+.0f} PLN")
+        print(colored("     └────────────────────────────────────┘", Colors.DIM))
+        
+        # Sekcja 4: Podział zysków (jeśli są)
+        if profit > 0 and len(c.founders) > 1:
+            print(colored("\n  📈 POTENCJALNY PODZIAŁ ZYSKÓW (przy dywidendzie)", Colors.BOLD))
+            for f in c.founders:
+                share = profit * (f.equity_percentage / 100)
+                print(f"     • {f.name} ({f.equity_percentage:.0f}%): {share:,.0f} PLN/mies")
+        
+        print(colored("\n└──────────────────────────────────────────────────────────┘", Colors.CYAN))
+        
+        # Ostrzeżenia
+        if not self.game_state.agreement_signed and len(c.founders) > 1:
+            print(colored("\n⚠️  UWAGA: Bez SHA podział zysków może być sporny!", Colors.RED))
+    
     def do_equity(self, arg):
         """Cap table"""
         if not self.game_state:
