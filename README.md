@@ -1,6 +1,7 @@
 # 🎮 Biznes - Symulator Startupu dla Founderów
 
 Edukacyjna gra konsolowa symulująca zakładanie i prowadzenie startupu w Polsce. Naucz się podejmować kluczowe decyzje biznesowe, prawne i finansowe w bezpiecznym środowisku.
+![img.png](img.png)
 
 ## 🎯 Cel gry
 

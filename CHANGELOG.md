@@ -1,3 +1,23 @@
+## [1.0.2] - 2026-01-29
+
+### Summary
+
+feat(other): add configuration, formatting, cli
+
+### Docs
+
+- docs: update README
+
+### Config
+
+- config: update goal.yaml
+
+### Other
+
+- update .gitignore
+- update img.png
+
+
 ## [1.0.1] - 2026-01-29
 
 ### Summary

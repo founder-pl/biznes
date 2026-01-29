@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "biznes"
-version = "1.0.1"
+version = "1.0.2"
 description = "Edukacyjna gra symulująca zakładanie startupu w Polsce"
 readme = "README.md"
 license = {text = "MIT"}
