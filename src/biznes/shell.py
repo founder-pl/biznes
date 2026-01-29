@@ -357,8 +357,9 @@ class BiznesShell(cmd.Cmd):
         """Obsługuje nieznane komendy i wybór numeryczny"""
         line = line.strip()
         
-        # Obsługa menu numerycznego gdy nie ma aktywnej gry
-        if not self.game_state and line in ['1', '2', '3', '0']:
+        # Obsługa menu numerycznego - ZAWSZE działa
+        if not self.game_state:
+            # Menu startowe
             if line == '1':
                 self.do_start("")
             elif line == '2':
@@ -367,9 +368,62 @@ class BiznesShell(cmd.Cmd):
                 self.do_pomoc("")
             elif line == '0':
                 return self.do_wyjscie("")
-            return
+            else:
+                print(colored("Wybierz 1-3 lub 0", Colors.RED))
+                self._show_main_menu()
+        else:
+            # Menu w grze
+            if line in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']:
+                self._handle_game_menu(line)
+            else:
+                print(colored("Wybierz numer z menu", Colors.RED))
+                self._show_game_menu()
+    
+    def _handle_game_menu(self, choice: str):
+        """Obsługuje wybór z menu gry"""
+        if choice == '1':
+            self.do_miesiac("")
+        elif choice == '2':
+            self.do_status("")
+        elif choice == '3':
+            self.do_akcje("")
+        elif choice == '4':
+            self.do_finanse("")
+        elif choice == '5':
+            self.do_portfele("")
+        elif choice == '6':
+            self.do_equity("")
+        elif choice == '7':
+            self.do_ryzyko("")
+        elif choice == '8':
+            self.do_zapisz("")
+        elif choice == '9':
+            self.do_pomoc("")
+        elif choice == '0':
+            if self._ask_yes_no("Zapisać grę przed wyjściem?"):
+                self.do_zapisz("")
+            self.game_state = None
+            self._show_main_menu()
+    
+    def _show_game_menu(self):
+        """Wyświetla menu podczas gry"""
+        c = self.game_state.company
+        month = self.game_state.current_month
         
-        print(f"Nieznana komenda: {line}. Wpisz 'pomoc' lub '3'.")
+        print(colored(f"\n{'─'*50}", Colors.CYAN))
+        print(colored(f"  Mies. {month} | 💰 {c.cash_on_hand:,.0f} | MRR: {c.mrr:,.0f} | ⏱️ {c.runway_months()} mies", Colors.DIM))
+        print(colored(f"{'─'*50}", Colors.CYAN))
+        print(f"  {colored('1', Colors.GREEN)}. ▶️  Następny miesiąc")
+        print(f"  {colored('2', Colors.GREEN)}. 📊 Status")
+        print(f"  {colored('3', Colors.GREEN)}. ⚡ Akcje")
+        print(f"  {colored('4', Colors.GREEN)}. 💰 Finanse")
+        print(f"  {colored('5', Colors.GREEN)}. 💼 Portfele")
+        print(f"  {colored('6', Colors.GREEN)}. 📈 Equity")
+        print(f"  {colored('7', Colors.GREEN)}. ⚠️  Ryzyko")
+        print(f"  {colored('8', Colors.GREEN)}. 💾 Zapisz")
+        print(f"  {colored('9', Colors.GREEN)}. ❓ Pomoc")
+        print(f"  {colored('0', Colors.GREEN)}. 🚪 Wyjście")
+        print()
     
     prompt = colored("biznes> ", Colors.GREEN)
     
@@ -784,21 +838,14 @@ class BiznesShell(cmd.Cmd):
         
         company = self.game_state.company
         
-        print(f"\n📊 SYTUACJA:")
-        print(f"   Forma: {company.legal_form.value.upper()}")
-        print(f"   Gotówka: {company.cash_on_hand:,.0f} PLN")
-        print(f"   Runway: {company.runway_months()} mies")
-        print(f"   MVP: {'✓' if company.mvp_completed else '✗'}")
-        
-        print(colored("\n💡 PIERWSZE KROKI:", Colors.YELLOW))
-        print("   1. 'akcje' - co możesz zrobić")
-        print("   2. 'miesiac' - następny miesiąc")
-        print("   3. 'ryzyko' - analiza zagrożeń")
-        
+        # Priorytety
         if not company.registered:
             print(colored("\n   ⚠️ PRIORYTET: Zarejestruj spółkę!", Colors.RED))
         if self.config.has_partner and not self.game_state.agreement_signed:
             print(colored("   ⚠️ PRIORYTET: Podpisz umowę wspólników!", Colors.RED))
+        
+        # Pokaż menu gry
+        self._show_game_menu()
     
     def do_miesiac(self, arg):
         """Następny miesiąc"""
@@ -825,6 +872,15 @@ class BiznesShell(cmd.Cmd):
         else:
             company.cash_on_hand -= net_burn
             changes.append(f"💰 Zysk: +{-net_burn:,.0f} PLN")
+
+        # Zapisz do historii (miesięczny snapshot zmian)
+        if changes:
+            self.action_history.append({
+                'month': month,
+                'type': 'month',
+                'name': 'Zmiany miesiąca',
+                'effects': changes
+            })
         
         if company.paying_customers > 0:
             growth = random.uniform(0.02, 0.08)
@@ -974,12 +1030,23 @@ class BiznesShell(cmd.Cmd):
                 self.do_portfele("")
             
             # Zapisz do historii
+            history_effects: List[str] = []
+            if msg:
+                history_effects.append(msg)
+            if isinstance(effects, dict):
+                if 'cash' in effects and isinstance(effects['cash'], (int, float)):
+                    history_effects.append(f"Gotówka {effects['cash']:+,.0f} PLN")
+                if 'mrr' in effects and isinstance(effects['mrr'], (int, float)):
+                    history_effects.append(f"MRR {effects['mrr']:+,.0f} PLN")
+                if 'burn' in effects and isinstance(effects['burn'], (int, float)):
+                    history_effects.append(f"Burn {effects['burn']:+,.0f} PLN/mies")
+
             self.action_history.append({
                 'month': self.game_state.current_month,
                 'type': 'action',
                 'name': action.name,
                 'success': success,
-                'effects': [msg] if msg else []
+                'effects': history_effects
             })
             self.actions_this_month += 1
     
@@ -1154,19 +1221,78 @@ class BiznesShell(cmd.Cmd):
                 print(f"      → {', '.join(entry['effects'])}")
     
     def do_status(self, arg):
-        """Status firmy"""
+        """Status firmy - pełny przegląd w formacie Markdown"""
         if not self.game_state:
             print(colored("Najpierw 'start'", Colors.RED))
             return
         
         c = self.game_state.company
-        print_box(f"STATUS - Miesiąc {self.game_state.current_month}", [
-            f"Gotówka: {c.cash_on_hand:,.0f} PLN",
-            f"MRR: {c.mrr:,.0f} PLN | Klienci: {c.paying_customers}",
-            f"Runway: {c.runway_months()} mies",
-            f"MVP: {'✓' if c.mvp_completed else f'{self.game_state.mvp_progress}%'}",
-            f"Spółka: {'✓' if c.registered else '✗'} | SHA: {'✓' if self.game_state.agreement_signed else '✗'}"
-        ])
+        month = self.game_state.current_month
+        founders = c.founders
+        profit = c.mrr - c.monthly_burn_rate
+
+        print(f"\n## 📊 STATUS - Miesiąc {month}\n")
+
+        # === TABELA WSPÓLNIKÓW (Markdown) ===
+        print("### Wspólnicy\n")
+        
+        # Nagłówek
+        header = "| Pozycja | " + " | ".join(f.name for f in founders) + " |"
+        separator = "|:--------|" + "|".join(":------:" for _ in founders) + "|"
+        print(header)
+        print(separator)
+        
+        # Wiersze danych
+        print("| **Equity** | " + " | ".join(f"{f.equity_percentage:.0f}%" for f in founders) + " |")
+        print("| **Vested** | " + " | ".join(f"{f.vested_percentage:.1f}%" for f in founders) + " |")
+        print("| **Zainwestowane** | " + " | ".join(f"{f.personal_invested:,.0f} PLN" for f in founders) + " |")
+        print("| **MVP wniesione** | " + " | ".join(f"{f.mvp_value:,.0f} PLN" if f.mvp_value > 0 else "-" for f in founders) + " |")
+        print("| **Kontakty** | " + " | ".join(str(f.contacts_count) if f.contacts_count > 0 else "-" for f in founders) + " |")
+        print("| **Zweryfikowany** | " + " | ".join("✓" if f.krs_verified and f.debtor_registry_verified else "⚠️" for f in founders) + " |")
+
+        # === STAN FIRMY (Markdown) ===
+        print("\n### Stan firmy\n")
+        print("| Metryka | Wartość |")
+        print("|:--------|-------:|")
+        print(f"| 💰 Gotówka | {c.cash_on_hand:,.0f} PLN |")
+        print(f"| 📈 MRR | {c.mrr:,.0f} PLN |")
+        print(f"| 🔥 Burn/mies | {c.monthly_burn_rate:,.0f} PLN |")
+        print(f"| 👥 Klienci | {c.paying_customers} |")
+        print(f"| ⏱️ Runway | {c.runway_months()} mies |")
+
+        print(f"| 💹 Wynik/mies | {profit:+,.0f} PLN |")
+
+        # === STATUS PRAWNY (Markdown) ===
+        print("\n### Status prawny i produkt\n")
+        print("| Element | Status |")
+        print("|:--------|:------:|")
+        reg = "✓ Zarejestrowana" if c.registered else "✗ Nie"
+        sha = "✓ Podpisana" if self.game_state.agreement_signed else "✗ Brak"
+        mvp = "✓ Ukończone" if c.mvp_completed else f"{self.game_state.mvp_progress}%"
+        print(f"| 🏢 Spółka | {reg} |")
+        print(f"| 📝 SHA | {sha} |")
+        print(f"| 🔧 MVP | {mvp} |")
+        print(f"| 📋 ESOP | {c.esop_pool_percentage:.0f}% |")
+
+        # === HISTORIA (Markdown) ===
+        if self.action_history:
+            print("\n### Ostatnie wydarzenia\n")
+            print("| Mies. | Typ | Wydarzenie | Efekt |")
+            print("|:-----:|:---:|:-----------|:------|")
+            for entry in self.action_history[-5:]:
+                m = entry.get('month', '?')
+                etype = entry.get('type')
+                if etype == 'event':
+                    icon = '⚡'
+                elif etype == 'month':
+                    icon = '📅'
+                else:
+                    icon = '✓' if entry.get('success', True) else '✗'
+                name = entry.get('name', '')[:35]
+                effects = ', '.join(entry.get('effects', []))[:25] or '-'
+                print(f"| {m} | {icon} | {name} | {effects} |")
+        
+        print()  # Pusta linia na końcu
     
     def do_akcje(self, arg):
         """Pokaż akcje"""
@@ -1190,84 +1316,76 @@ class BiznesShell(cmd.Cmd):
         ])
     
     def do_portfele(self, arg):
-        """Portfele wspólników i biznesu - przejrzystość finansowa"""
+        """Portfele wspólników i biznesu - przejrzystość finansowa (Markdown)"""
         if not self.game_state:
             print(colored("Najpierw 'start'", Colors.RED))
             return
         
         c = self.game_state.company
         month = self.game_state.current_month
-        
-        print(colored("\n" + "═"*60, Colors.CYAN))
-        print(colored("  💼 PRZEJRZYSTOŚĆ FINANSOWA", Colors.HEADER))
-        print(colored("═"*60, Colors.CYAN))
-        
-        # Sekcja 1: Portfele indywidualne
-        print(colored("\n┌─ PORTFELE WSPÓLNIKÓW ─────────────────────────────────────┐", Colors.CYAN))
-        
-        for f in c.founders:
-            verified = "✓" if f.krs_verified and f.debtor_registry_verified else "⚠️"
-            print(colored(f"\n  👤 {f.name} {verified}", Colors.BOLD))
-            print(f"     ├─ Equity: {f.equity_percentage:.0f}% (vested: {f.vested_percentage:.1f}%)")
-            print(f"     ├─ Zainwestowane: {f.personal_invested:,.0f} PLN")
-            print(f"     ├─ Otrzymane z firmy: {f.total_received:,.0f} PLN")
-            
-            # Wkłady niefinansowe
-            contributions = []
-            if f.mvp_value > 0:
-                contributions.append(f"MVP: {f.mvp_value:,.0f} PLN")
-            if f.contacts_count > 0:
-                contributions.append(f"Kontakty: {f.contacts_count}")
-            if f.experience_years > 0:
-                contributions.append(f"Doświadczenie: {f.experience_years} lat")
-            
-            if contributions:
-                print(f"     ├─ Wkłady: {', '.join(contributions)}")
-            
-            # Bilans osobisty
-            balance = f.total_received - f.personal_invested
-            balance_color = Colors.GREEN if balance >= 0 else Colors.RED
-            print(f"     └─ Bilans: {colored(f'{balance:+,.0f} PLN', balance_color)}")
-        
-        print(colored("\n└──────────────────────────────────────────────────────────┘", Colors.CYAN))
-        
-        # Sekcja 2: Finanse biznesu
-        print(colored("\n┌─ FINANSE BIZNESU ────────────────────────────────────────┐", Colors.CYAN))
-        print(f"\n  💰 STAN KONTA FIRMOWEGO")
-        print(f"     ├─ Gotówka: {c.cash_on_hand:,.0f} PLN")
-        print(f"     ├─ MRR: {c.mrr:,.0f} PLN")
-        print(f"     ├─ Burn rate: {c.monthly_burn_rate:,.0f} PLN/mies")
-        print(f"     └─ Runway: {c.runway_months()} mies")
-        
-        # Sekcja 3: Miesięczny P&L
+        founders = c.founders
         profit = c.mrr - c.monthly_burn_rate
-        profit_color = Colors.GREEN if profit >= 0 else Colors.RED
-        
-        print(colored("\n  📊 MIESIĘCZNY RACHUNEK ZYSKÓW I STRAT", Colors.BOLD))
-        print(colored("     ┌────────────────────────────────────┐", Colors.DIM))
-        print(f"     │ {colored('PRZYCHODY:', Colors.GREEN)}")
-        print(f"     │   MRR (klienci):      {c.mrr:>10,.0f} PLN")
-        print(f"     │ ───────────────────────────────────")
-        print(f"     │ {colored('KOSZTY:', Colors.RED)}")
-        print(f"     │   Burn rate:          {c.monthly_burn_rate:>10,.0f} PLN")
-        if c.employees > 0:
-            print(f"     │     (w tym pensje:   ~{c.employees * 8000:>9,.0f} PLN)")
-        print(f"     │ ───────────────────────────────────")
-        print(f"     │ {colored('WYNIK:', profit_color)} {profit:>21,+.0f} PLN")
-        print(colored("     └────────────────────────────────────┘", Colors.DIM))
-        
-        # Sekcja 4: Podział zysków (jeśli są)
-        if profit > 0 and len(c.founders) > 1:
-            print(colored("\n  📈 POTENCJALNY PODZIAŁ ZYSKÓW (przy dywidendzie)", Colors.BOLD))
-            for f in c.founders:
+
+        print(f"\n## 💼 PRZEJRZYSTOŚĆ FINANSOWA - Miesiąc {month}\n")
+
+        print("### Portfele wspólników\n")
+        header = "| Pozycja | " + " | ".join(f.name for f in founders) + " |"
+        separator = "|:--------|" + "|".join("------:" for _ in founders) + "|"
+        print(header)
+        print(separator)
+
+        print("| **Equity** | " + " | ".join(f"{f.equity_percentage:.0f}%" for f in founders) + " |")
+        print("| **Vested** | " + " | ".join(f"{f.vested_percentage:.1f}%" for f in founders) + " |")
+        print("| **Zainwestowane** | " + " | ".join(f"{f.personal_invested:,.0f} PLN" for f in founders) + " |")
+        print("| **Otrzymane z firmy** | " + " | ".join(f"{f.total_received:,.0f} PLN" for f in founders) + " |")
+        print("| **Bilans** | " + " | ".join(f"{(f.total_received - f.personal_invested):+,.0f} PLN" for f in founders) + " |")
+        print("| **MVP wniesione** | " + " | ".join(f"{f.mvp_value:,.0f} PLN" if f.mvp_value > 0 else "-" for f in founders) + " |")
+        print("| **Kontakty** | " + " | ".join(str(f.contacts_count) if f.contacts_count > 0 else "-" for f in founders) + " |")
+        print("| **Zweryfikowany** | " + " | ".join("✓" if f.krs_verified and f.debtor_registry_verified else "⚠️" for f in founders) + " |")
+
+        print("\n### Finanse firmy\n")
+        print("| Metryka | Wartość |")
+        print("|:--------|-------:|")
+        print(f"| 💰 Gotówka | {c.cash_on_hand:,.0f} PLN |")
+        print(f"| 📈 MRR | {c.mrr:,.0f} PLN |")
+        print(f"| 🔥 Burn/mies | {c.monthly_burn_rate:,.0f} PLN |")
+        print(f"| 👥 Klienci | {c.paying_customers} |")
+        print(f"| ⏱️ Runway | {c.runway_months()} mies |")
+        print(f"| 💹 Wynik/mies | {profit:+,.0f} PLN |")
+
+        print("\n### Umowy i struktura\n")
+        print("| Element | Status |")
+        print("|:--------|:------:|")
+        print(f"| 🏢 Spółka zarejestrowana | {'TAK' if c.registered else 'NIE'} |")
+        print(f"| 📝 SHA podpisana | {'TAK' if self.game_state.agreement_signed else 'NIE'} |")
+        print(f"| 📋 ESOP | {c.esop_pool_percentage:.0f}% |")
+
+        if profit > 0 and len(founders) > 1:
+            print("\n### Potencjalny podział zysku (dywidenda)\n")
+            print("| Wspólnik | Equity | Zysk/mies |")
+            print("|:--------|------:|---------:|")
+            for f in founders:
                 share = profit * (f.equity_percentage / 100)
-                print(f"     • {f.name} ({f.equity_percentage:.0f}%): {share:,.0f} PLN/mies")
-        
-        print(colored("\n└──────────────────────────────────────────────────────────┘", Colors.CYAN))
-        
-        # Ostrzeżenia
-        if not self.game_state.agreement_signed and len(c.founders) > 1:
-            print(colored("\n⚠️  UWAGA: Bez SHA podział zysków może być sporny!", Colors.RED))
+                print(f"| {f.name} | {f.equity_percentage:.0f}% | {share:,.0f} PLN |")
+
+        if self.action_history:
+            print("\n### Historia (ostatnie 10)\n")
+            print("| Mies. | Typ | Wydarzenie | Efekt |")
+            print("|:-----:|:---:|:-----------|:------|")
+            for entry in self.action_history[-10:]:
+                m = entry.get('month', '?')
+                etype = entry.get('type')
+                if etype == 'event':
+                    icon = '⚡'
+                elif etype == 'month':
+                    icon = '📅'
+                else:
+                    icon = '✓' if entry.get('success', True) else '✗'
+                name = entry.get('name', '')[:35]
+                effects = ', '.join(entry.get('effects', []))[:40] or '-'
+                print(f"| {m} | {icon} | {name} | {effects} |")
+
+        print()
     
     def do_equity(self, arg):
         """Cap table"""
@@ -1430,9 +1548,7 @@ class BiznesShell(cmd.Cmd):
         self.game_state.mvp_progress = data.get('mvp_progress', 0)
         
         print(colored(f"\n✓ Wczytano grę: {save['name']}", Colors.GREEN))
-        print(f"   Miesiąc: {self.game_state.current_month}")
-        print(f"   Gotówka: {self.game_state.company.cash_on_hand:,.0f} PLN")
-        print(colored("\nWpisz 'miesiac' aby kontynuować grę.", Colors.YELLOW))
+        self._show_game_menu()
     
     def do_zapisz(self, arg):
         """Zapisz grę"""
