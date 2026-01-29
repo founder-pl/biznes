@@ -59,6 +59,36 @@ python -m biznes.shell
 | `pomoc` | Wyświetl pomoc |
 | `wyjscie` | Zakończ grę |
 
+
+```bash
+============================================================                                                                                                                                                                                            
+  PODSUMOWANIE KONFIGURACJI
+============================================================
+┌─────────────────────────────────────────────────┐
+│ TWOJA GRA                                       │
+├─────────────────────────────────────────────────┤
+│ Gracz: f1 (technical)                           │
+│ Partner: f2                                     │
+│                                                 │
+│ Forma prawna: PSA                               │
+│ Equity: Ty 56.0% / Partner 34.0% / ESOP 10.0%   │
+│ Vesting: 48 mies. z 12 mies. cliff              │
+│                                                 │
+│ Kapitał startowy: 0 PLN                         │
+│ MVP: Tak                                        │
+│                                                 │
+│ Trudność: normal                                │
+│ Zdarzenia losowe: Włączone                      │
+└─────────────────────────────────────────────────┘
+
+⚠️  BRAKUJĄCE ZABEZPIECZENIA:                                                                                                                                                                                                                           
+   • Klauzula poufności (NDA)
+   • Procedura rozwiązywania impasów
+
+✓ Gra rozpoczęta! Wpisz 'status' aby zobaczyć stan firmy.                                                                                                                                                                                               
+  Wpisz 'miesiac' aby przejść do następnego miesiąca.
+```
+
 ## 🎓 Czego się nauczysz?
 
 ### Formy prawne
