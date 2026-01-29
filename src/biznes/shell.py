@@ -325,15 +325,26 @@ class ActionSystem:
 class BiznesShell(cmd.Cmd):
     """Interaktywny shell gry Biznes"""
     
-    intro = f"""
-{colored('═'*60, Colors.CYAN)}
-{colored('  BIZNES - Symulator Startupu v2.0', Colors.BOLD)}
-{colored('  Edukacyjna gra o zakładaniu firmy w Polsce', Colors.CYAN)}
-{colored('═'*60, Colors.CYAN)}
-
-Wpisz {colored('start', Colors.GREEN)} aby rozpocząć nową grę.
-Wpisz {colored('pomoc', Colors.GREEN)} aby zobaczyć komendy.
-"""
+    intro = ""  # Ustawiamy dynamicznie w preloop
+    
+    def preloop(self):
+        """Wyświetla intro z informacją o zapisanych grach"""
+        saves = self._get_saved_games()
+        
+        print(colored('═'*60, Colors.CYAN))
+        print(colored('  BIZNES - Symulator Startupu v2.0', Colors.BOLD))
+        print(colored('  Edukacyjna gra o zakładaniu firmy w Polsce', Colors.CYAN))
+        print(colored('═'*60, Colors.CYAN))
+        print()
+        
+        if saves:
+            print(colored(f"📂 Znaleziono {len(saves)} zapisanych gier.", Colors.YELLOW))
+            print(f"   Wpisz {colored('wczytaj', Colors.GREEN)} aby kontynuować.")
+            print()
+        
+        print(f"Wpisz {colored('start', Colors.GREEN)} aby rozpocząć nową grę.")
+        print(f"Wpisz {colored('pomoc', Colors.GREEN)} aby zobaczyć komendy.")
+        print()
     
     prompt = colored("biznes> ", Colors.GREEN)
     
