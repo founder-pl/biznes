@@ -88,6 +88,7 @@ class Founder:
     references_verified: bool = False
     
     # Status
+    is_player: bool = False  # Czy to gracz
     is_good_leaver: Optional[bool] = None
     left_company: bool = False
     left_month: Optional[int] = None
@@ -341,9 +342,17 @@ class GameState:
     partner_met: bool = False
     partner_verified: bool = False
     agreement_negotiated: bool = False
+    agreement_signed: bool = False  # Czy SHA podpisana
     company_founded: bool = False
     first_customer: bool = False
     product_market_fit_achieved: bool = False
+    
+    # Postęp MVP
+    mvp_progress: int = 0  # 0-100%
+    
+    # Oczekujące decyzje
+    pending_investment: Optional[Dict] = None
+    adding_partner: bool = False
     
     # Parametry symulacji
     simulation_speed: str = "normal"  # "fast", "normal", "detailed"
@@ -389,27 +398,39 @@ class PlayerConfig:
     
     # Parametry wejściowe - sytuacja startowa
     has_mvp: bool = False
+    player_has_mvp: bool = False  # Alias dla has_mvp
     mvp_hours_invested: int = 0
-    mvp_hourly_rate: int = 150
+    mvp_hours: int = 0  # Alias
+    mvp_hourly_rate: float = 150.0
     mvp_external_costs: float = 0.0
+    mvp_calculated_value: float = 0.0
     
     # Parametry partnera
+    has_partner: bool = False
     partner_name: str = ""
     partner_brings_capital: float = 0.0
+    partner_capital: float = 0.0  # Alias
     partner_brings_customers: int = 0
+    partner_has_customers: bool = False
     partner_industry_experience_years: int = 0
+    partner_experience_years: int = 0  # Alias
     partner_startup_experience: int = 0
     partner_has_contacts: bool = False
     partner_verified_krs: bool = False
+    partner_krs_verified: bool = False  # Alias
     partner_verified_debts: bool = False
+    partner_debts_verified: bool = False  # Alias
     
     # Preferencje equity
     proposed_equity_split_player: float = 50.0
+    player_equity: float = 50.0  # Alias
     proposed_equity_split_partner: float = 50.0
+    partner_equity: float = 50.0  # Alias
     esop_pool: float = 10.0
     
     # Preferencje prawne
     preferred_legal_form: str = "psa"
+    legal_form: str = "psa"  # Alias
     vesting_months: int = 48
     cliff_months: int = 12
     wants_tag_along: bool = True
@@ -427,6 +448,8 @@ class PlayerConfig:
     # Zasoby
     personal_runway_months: int = 6
     personal_savings: float = 0.0
+    initial_cash: float = 10000.0
+    monthly_burn: float = 5000.0
     willing_to_work_without_salary: bool = False
     max_months_without_salary: int = 0
     

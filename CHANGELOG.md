@@ -1,3 +1,28 @@
+## [1.0.3] - 2026-01-29
+
+### Summary
+
+refactor(docs): configuration management system
+
+### Core
+
+- update src/biznes/core/models.py
+- update src/biznes/shell.py
+
+### Docs
+
+- docs: update README
+
+### Build
+
+- update pyproject.toml
+
+### Other
+
+- update src/biznes/__pycache__/__init__.cpython-313.pyc
+- update src/biznes/__pycache__/shell.cpython-313.pyc
+
+
 ## [1.0.2] - 2026-01-29
 
 ### Summary
