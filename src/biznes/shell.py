@@ -61,6 +61,21 @@ def _pluralize_months(n: int) -> str:
     return _pluralize_months_shared(n)
 
 
+def _shorten(text: str, max_len: int) -> str:
+    if max_len <= 0:
+        return ""
+    if len(text) <= max_len:
+        return text
+    if max_len <= 3:
+        return text[:max_len]
+    cut = text[: max_len - 3]
+    if " " in cut:
+        cut = cut[: cut.rfind(" ")]
+        if not cut:
+            cut = text[: max_len - 3]
+    return cut + "..."
+
+
 def print_box(title: str, content: List[str], color: str = Colors.CYAN):
     """Drukuje tekst w ramce"""
     max_len = max(len(title), max(len(line) for line in content) if content else 0)
@@ -972,7 +987,7 @@ class BiznesShell(cmd.Cmd):
             else:
                 remaining = 100 - after_state.get('mvp_progress', 0)
                 print(f"│    • Pozostało ~{remaining}% do ukończenia MVP")
-                print(f"│    • Szacunkowo {max(1, remaining // 25)} miesiące do końca")
+                print(f"│    • Szacunkowo {_pluralize_months(max(1, remaining // 25))} do końca")
         elif action.id == "find_customers":
             print(f"│    • Nowy MRR = recurring revenue")
             print(f"│    • Każdy klient to dowód PMF")
@@ -1853,7 +1868,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                 if 'burn' in effects and isinstance(effects['burn'], (int, float)):
                     history_effects.append(f"Burn {effects['burn']:+,.0f} PLN/mies")
 
-            history_effects = [e[:27] + "..." if len(e) > 30 else e for e in history_effects]
+            history_effects = [_shorten(e, 30) for e in history_effects]
 
             self.action_history.append({
                 'month': self.game_state.current_month,
@@ -2126,7 +2141,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                 else:
                     icon = '✓' if entry.get('success', True) else '✗'
                 name = entry.get('name', '')[:35]
-                effects = ', '.join(entry.get('effects', []))[:25] or '-'
+                effects = _shorten(', '.join(entry.get('effects', [])) or '-', 40)
                 print(f"| {m} | {icon} | {name} | {effects} |")
         
         print()  # Pusta linia na końcu
@@ -2219,7 +2234,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                 else:
                     icon = '✓' if entry.get('success', True) else '✗'
                 name = entry.get('name', '')[:35]
-                effects = ', '.join(entry.get('effects', []))[:40] or '-'
+                effects = _shorten(', '.join(entry.get('effects', [])) or '-', 60)
                 print(f"| {m} | {icon} | {name} | {effects} |")
 
         print()

@@ -20,39 +20,35 @@ from .core.models import (
     GameState, PlayerConfig, Company, Founder,
     LegalForm, FoundersAgreement
 )
+from .utils.guidance import (
+    get_priority_action as _get_priority_action_shared,
+    get_risk_indicators as _get_risk_indicators_shared,
+    has_partner as _has_partner_shared,
+    pluralize_months as _pluralize_months_shared,
+)
+
+
+def _shorten_text(text: str, max_len: int) -> str:
+    if max_len <= 0:
+        return ""
+    if len(text) <= max_len:
+        return text
+    if max_len <= 3:
+        return text[:max_len]
+    cut = text[: max_len - 3]
+    if " " in cut:
+        cut = cut[: cut.rfind(" ")]
+        if not cut:
+            cut = text[: max_len - 3]
+    return cut + "..."
 
 
 def _pluralize_months(n: int) -> str:
-    if n == 1:
-        return "1 miesiąc"
-    if 2 <= n <= 4:
-        return f"{n} miesiące"
-    return f"{n} miesięcy"
+    return _pluralize_months_shared(n)
 
 
 def get_risk_indicators(game_state: GameState, config: Optional[PlayerConfig]) -> str:
-    c = game_state.company
-    risks = []
-
-    runway = c.runway_months()
-    if runway < 3:
-        risks.append("🔴 RUNWAY: KRYTYCZNY!")
-    elif runway < 6:
-        risks.append("🟡 RUNWAY: NISKI")
-
-    if config and config.has_partner and not game_state.agreement_signed:
-        risks.append("🔴 SHA: BRAK UMOWY!")
-
-    if not c.registered and game_state.current_month > 3:
-        risks.append("🟡 SPÓŁKA: NIEZAREJESTROWANA")
-
-    if game_state.current_month > 6 and c.paying_customers < 5:
-        risks.append("🟠 PMF: BRAK TRAKCJI")
-
-    if not c.mvp_completed and game_state.current_month > 4:
-        risks.append("🟡 MVP: NIEUKOŃCZONE")
-
-    return " | ".join(risks) if risks else "✅ Brak krytycznych ryzyk"
+    return _get_risk_indicators_shared(game_state, config)
 
 
 def set_game_subtitle(app: App, game_state: Optional[GameState], config: Optional[PlayerConfig]) -> None:
@@ -378,16 +374,16 @@ class ActionResultModal(ModalScreen):
         yield Container(
             Static("✅ REZULTAT AKCJI", classes="modal-title"),
             Rule(),
-            Static(f"[bold]{self.title}[/bold]"),
-            Static(self.message or ""),
+            Static(f"[bold]{self.title}[/bold]", classes="action-title"),
+            Static(self.message or "", classes="action-message"),
             Rule(),
-            Static("[bold]📊 ZMIANY[/bold]"),
-            *[Static(line) for line in (self.changes or ["Brak bezpośrednich zmian"])],
+            Static("📊 ZMIANY", classes="section-title"),
+            *[Static(line, classes="change-line") for line in (self.changes or ["Brak bezpośrednich zmian"])],
             Static(""),
-            Static("[bold]💡 CO TO OZNACZA[/bold]"),
-            *[Static(line) for line in (self.meaning or [])],
+            Static("💡 CO TO OZNACZA", classes="section-title"),
+            *[Static(line, classes="meaning-line") for line in (self.meaning or [])],
             Static(""),
-            Static(f"[bold green]👉 NASTĘPNY PRIORYTET:[/bold green] {self.next_priority}"),
+            Static(f"👉 NASTĘPNY PRIORYTET: {self.next_priority}", classes="next-priority"),
             Rule(),
             Button("OK", id="ok", variant="primary"),
             Static("[Enter] OK", classes="modal-hint"),
@@ -424,7 +420,7 @@ class RiskModal(ModalScreen):
             risks.append(("WYSOKIE", "Runway < 6 mies"))
             score += 25
         
-        if self.config.has_partner and not self.game_state.agreement_signed:
+        if _has_partner_shared(self.game_state, self.config) and not self.game_state.agreement_signed:
             risks.append(("KRYTYCZNE", "Brak umowy wspólników!"))
             score += 30
         
@@ -612,53 +608,7 @@ class GameScreen(Screen):
     def _get_priority_action(self) -> Tuple[str, str, str]:
         if not self.game_state:
             return ("", "", "")
-
-        c = self.game_state.company
-        month = self.game_state.current_month
-
-        if c.runway_months() < 3:
-            return (
-                "🚨 SZUKAJ FINANSOWANIA LUB KLIENTÓW",
-                f"Masz mniej niż 3 miesiące runway ({c.runway_months()} mies)",
-                f"Bez działania: BANKRUCTWO w ~{c.runway_months()} mies",
-            )
-
-        if self.app.config and self.app.config.has_partner and not self.game_state.agreement_signed:
-            return (
-                "📝 PODPISZ SHA",
-                "Bez umowy partner może odejść z kodem/klientami",
-                "Bez SHA rośnie ryzyko konfliktu i blokady spółki",
-            )
-
-        if not c.registered and month > 2:
-            return (
-                "🏢 ZAREJESTRUJ SPÓŁKĘ",
-                "Bez spółki nie możesz legalnie pozyskać inwestora",
-                "Bez rejestracji odpowiadasz osobiście",
-            )
-
-        if not c.mvp_completed:
-            return (
-                "🔧 DOKOŃCZ MVP",
-                "Bez produktu nie zdobędziesz klientów",
-                "Bez MVP spalasz gotówkę bez walidacji",
-            )
-
-        if c.mvp_completed and c.paying_customers < 10:
-            return (
-                "🎯 ZDOBĄDŹ KLIENTÓW",
-                "Klienci = walidacja + MRR",
-                "Bez klientów brak dowodu PMF",
-            )
-
-        if c.runway_months() < 6:
-            return (
-                "💰 WYDŁUŻ RUNWAY",
-                f"Masz tylko {_pluralize_months(c.runway_months())} runway",
-                "Zalecane minimum to 6 miesięcy",
-            )
-
-        return ("📈 ROZWIJAJ BIZNES", "Masz podstawy, teraz skaluj", "")
+        return _get_priority_action_shared(self.game_state, self.app.config)
 
     def _check_warnings_before_month(self) -> List[Dict]:
         if not self.game_state:
@@ -690,7 +640,7 @@ class GameScreen(Screen):
                 "action": "Zacznij szukać inwestora lub klientów",
             })
 
-        if self.app.config and self.app.config.has_partner and not self.game_state.agreement_signed and month >= 3:
+        if _has_partner_shared(self.game_state, self.app.config) and not self.game_state.agreement_signed and month >= 3:
             warnings.append({
                 "level": "HIGH",
                 "title": "RYZYKO KONFLIKTU",
@@ -1219,7 +1169,9 @@ class GameScreen(Screen):
         if before.get("burn") != after.get("burn"):
             diff = after["burn"] - before["burn"]
             color = "red" if diff > 0 else "green"
-            lines.append(f"🔥 Burn: {before['burn']:,.0f} → [{color}]{after['burn']:,.0f}[/{color}] PLN/mies")
+            lines.append(
+                f"🔥 Burn: {before['burn']:,.0f} → [{color}]{after['burn']:,.0f}[/{color}] PLN/mies ({diff:+,.0f})"
+            )
 
         if before.get("runway") != after.get("runway"):
             diff = after["runway"] - before["runway"]
@@ -1268,7 +1220,7 @@ class GameScreen(Screen):
     
     def _log_action(self, name: str, effect: str) -> None:
         short_name = name[:35]
-        short_effect = (effect[:27] + "...") if len(effect) > 30 else effect
+        short_effect = _shorten_text(effect, 30)
         self.action_history.append({
             'month': self.game_state.current_month,
             'name': short_name,
@@ -1300,7 +1252,7 @@ class GameScreen(Screen):
         ]
         
         # Zdarzenia kontekstowe
-        if self.app.config.has_partner and not self.game_state.agreement_signed and month > 3:
+        if _has_partner_shared(self.game_state, self.app.config) and not self.game_state.agreement_signed and month > 3:
             events.append(
                 ('negative', '⚔️ Konflikt z partnerem!', 'Spór o podział obowiązków i equity!', lambda: 'Podpisz SHA aby uniknąć!')
             )
@@ -1432,7 +1384,7 @@ class MonthlyReportScreen(Screen):
         content.mount(Static(f"[bold]📈 MRR:[/bold] {c.mrr:,.0f} PLN"))
         content.mount(Static(f"[bold]🔥 Burn:[/bold] {c.monthly_burn_rate:,.0f} PLN/mies"))
         content.mount(Static(f"[bold]👥 Klienci:[/bold] {c.paying_customers}"))
-        content.mount(Static(f"[bold]⏱️ Runway:[/bold] {runway} mies"))
+        content.mount(Static(f"[bold]⏱️ Runway:[/bold] {_pluralize_months(runway)}"))
         content.mount(Static(""))
 
         color = "green" if profit >= 0 else "red"
@@ -1449,52 +1401,7 @@ class MonthlyReportScreen(Screen):
             content.mount(Static(f"[red]{prio_consequence}[/red]"))
 
     def _get_priority_action_local(self) -> Tuple[str, str, str]:
-        c = self.game_state.company
-        month = self.game_state.current_month
-
-        if c.runway_months() < 3:
-            return (
-                "🚨 SZUKAJ FINANSOWANIA LUB KLIENTÓW",
-                f"Masz mniej niż 3 miesiące runway ({c.runway_months()} mies)",
-                f"Bez działania: BANKRUCTWO w ~{c.runway_months()} mies",
-            )
-
-        if self.config and self.config.has_partner and not self.game_state.agreement_signed:
-            return (
-                "📝 PODPISZ SHA",
-                "Bez umowy partner może odejść z kodem/klientami",
-                "Bez SHA rośnie ryzyko konfliktu",
-            )
-
-        if not c.registered and month > 2:
-            return (
-                "🏢 ZAREJESTRUJ SPÓŁKĘ",
-                "Bez spółki nie możesz legalnie pozyskać inwestora",
-                "Bez rejestracji odpowiadasz osobiście",
-            )
-
-        if not c.mvp_completed:
-            return (
-                "🔧 DOKOŃCZ MVP",
-                "Bez produktu nie zdobędziesz klientów",
-                "Bez MVP spalasz gotówkę bez walidacji",
-            )
-
-        if c.mvp_completed and c.paying_customers < 10:
-            return (
-                "🎯 ZDOBĄDŹ KLIENTÓW",
-                "Klienci = walidacja + MRR",
-                "Bez klientów brak dowodu PMF",
-            )
-
-        if c.runway_months() < 6:
-            return (
-                "💰 WYDŁUŻ RUNWAY",
-                f"Masz tylko {c.runway_months()} miesięcy runway",
-                "Zalecane minimum to 6 miesięcy",
-            )
-
-        return ("📈 ROZWIJAJ BIZNES", "Masz podstawy, teraz skaluj", "")
+        return _get_priority_action_shared(self.game_state, self.config)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.app.pop_screen()
@@ -1735,8 +1642,12 @@ class HistoryScreen(Screen):
             for entry in self.history[-20:]:
                 if entry['month'] != current_month:
                     current_month = entry['month']
-                    content.mount(Static(f"\n[bold]Miesiąc {current_month}[/bold]"))
-                content.mount(Static(f"  {entry['name']} → {entry['effect']}"))
+                    content.mount(Static(f"\n[bold cyan]Miesiąc {current_month}[/bold cyan]"))
+
+                name = _shorten_text(str(entry.get('name', '')), 50)
+                effect = _shorten_text(str(entry.get('effect', '')), 70)
+                color = "yellow" if str(entry.get('name', '')).startswith("⚡") else "green"
+                content.mount(Static(f"  [{color}]{name}[/{color}] [dim]→ {effect}[/dim]"))
 
         content.mount(Rule())
         self._mount_history_analysis(content)
@@ -1762,7 +1673,7 @@ class HistoryScreen(Screen):
 
         for entry in events:
             name = str(entry.get("name", ""))
-            if "konflikt" in name.lower() and self.config.has_partner and not self.game_state.agreement_signed:
+            if "konflikt" in name.lower() and _has_partner_shared(self.game_state, self.config) and not self.game_state.agreement_signed:
                 bad.append(("Konflikt bez SHA", "Wysokie ryzyko sporów founderów – podpisz SHA wcześniej"))
 
         content.mount(Static("[bold]📚 ANALIZA DECYZJI[/bold]"))
@@ -1989,7 +1900,13 @@ class BiznesApp(App):
     .warnings-modal { align: center middle; width: 70; height: auto; border: double $warning; padding: 2; background: $surface; }
     .warnings-actions { align: center middle; height: auto; }
 
-    .action-result-modal { align: center middle; width: 75; height: auto; border: solid $success; padding: 2; background: $surface; }
+    .action-result-modal { align: center middle; width: 78; height: auto; border: double $success; padding: 2; background: $surface; }
+    .action-title { text-style: bold; }
+    .action-message { color: $text; }
+    .section-title { text-style: bold; color: $primary; }
+    .change-line { color: $text; }
+    .meaning-line { color: $text; }
+    .next-priority { text-style: bold; color: $success; }
     .progress-box { width: 100%; height: auto; }
     
     Button { margin: 1 0; }

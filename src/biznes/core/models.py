@@ -61,6 +61,16 @@ class RiskLevel(Enum):
 
 
 @dataclass
+class ActionMode:
+    name: str
+    cost: int = 0
+    time_cost: int = 1
+    success_rate: float = 1.0
+    quality_modifier: float = 1.0
+    requires_skill: Optional[str] = None
+
+
+@dataclass
 class Founder:
     """Reprezentacja założyciela"""
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
@@ -189,6 +199,9 @@ class Company:
     monthly_burn_rate: float = 0.0
     mrr: float = 0.0
     arr: float = 0.0
+
+    cost_multiplier: float = 1.0
+    extra_monthly_costs: float = 0.0
     
     # Klienci
     total_customers: int = 0
@@ -284,7 +297,7 @@ class GameEvent:
             changes['cash'] = self.cash_change
             
         if self.burn_rate_change != 0:
-            company.monthly_burn_rate += self.burn_rate_change
+            company.extra_monthly_costs += self.burn_rate_change
             changes['burn_rate'] = self.burn_rate_change
             
         if self.valuation_multiplier != 1.0:
@@ -293,6 +306,62 @@ class GameEvent:
             changes['valuation'] = f"{old_val} -> {company.current_valuation}"
             
         return changes
+
+
+@dataclass
+class ActionPointSystem:
+    base_points: int = 4
+
+    def get_monthly_points(self, state: "GameState") -> int:
+        c = state.company
+
+        points = self.base_points
+        points += min(2, c.employees)
+
+        if any((not f.is_player) and (not f.left_company) for f in c.founders):
+            points += 2
+
+        if c.runway_months() < 3:
+            points -= 1
+
+        return max(1, points)
+
+
+class CostCalculator:
+    def calculate_monthly_burn(self, state: "GameState") -> Dict[str, int]:
+        c = state.company
+        costs: Dict[str, int] = {}
+
+        costs['founder_living'] = 3000
+
+        if c.registered:
+            costs['accounting'] = 1000
+            costs['krs_registry'] = 200
+            if c.legal_form == LegalForm.PSA:
+                costs['shareholder_registry'] = 150
+
+        if state.agreement_signed:
+            costs['legal_retainer'] = 500
+
+        if c.mvp_completed or state.mvp_progress > 0:
+            costs['hosting'] = int(300 + (c.paying_customers * 10))
+            costs['tools'] = 200
+
+        costs['employees'] = int(c.employees * 12000)
+
+        if c.paying_customers > 10:
+            costs['support'] = int(c.mrr * 0.05)
+        if c.paying_customers > 50:
+            costs['infrastructure'] = int(c.mrr * 0.10)
+
+        costs = {k: int(v) for k, v in costs.items() if int(v) != 0}
+        return costs
+
+    def total_burn(self, state: "GameState") -> int:
+        c = state.company
+        base = sum(self.calculate_monthly_burn(state).values())
+        total = (base * c.cost_multiplier) + c.extra_monthly_costs
+        return int(max(0, total))
 
 
 @dataclass
