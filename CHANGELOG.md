@@ -1,3 +1,19 @@
+## [1.0.6] - 2026-01-30
+
+### Summary
+
+feat(build): configuration management system
+
+### Core
+
+- update src/biznes/shell.py
+
+### Other
+
+- build: update Makefile
+- update src/biznes/__pycache__/shell.cpython-313.pyc
+
+
 ## [1.0.5] - 2026-01-30
 
 ### Summary

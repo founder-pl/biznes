@@ -18,6 +18,9 @@ FLAKE8 = poetry run flake8
 COVERAGE = poetry run coverage
 PART = patch
 
+# Prefer system python for test runs to avoid missing pytest in a local venv
+PYTHON_SYSTEM := $(shell PATH=/usr/bin:/bin command -v python3 || command -v python3)
+
 .PHONY: help install dev test build publish clean push
 
 help:
@@ -37,7 +40,7 @@ dev:
 	pip install -e ".[dev]"
 
 test:
-	python3 -m pytest -q
+	$(PYTHON_SYSTEM) -m pytest -q
 
 build: clean
 	python -m pip install --upgrade build twine

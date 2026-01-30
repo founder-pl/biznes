@@ -1125,7 +1125,7 @@ class BiznesShell(cmd.Cmd):
             if not raw:
                 # domyślny: pierwszy dostępny
                 for _, m in modes:
-                if (float(m.cost) <= 0 or company.cash_on_hand >= float(m.cost)) and remaining_points >= int(m.time_cost):
+                    if (float(m.cost) <= 0 or company.cash_on_hand >= float(m.cost)) and remaining_points >= int(m.time_cost):
                         return m
                 return None
             try:
