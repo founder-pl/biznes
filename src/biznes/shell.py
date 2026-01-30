@@ -1922,6 +1922,59 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             self.config.esop_pool = 10
             print(colored("💡 Solo founding jest trudniejsze, ale możliwe.", Colors.CYAN))
         
+        # ETAP 3b: Founders Agreement (tylko jeśli jest partner)
+        self.config.fa_signed = False
+        self.config.fa_trial_months = 0
+        self.config.fa_end_action = "dissolve"
+        
+        if has_partner:
+            print(colored("\n\n" + "─"*60, Colors.CYAN))
+            print(colored("  📋 FOUNDERS AGREEMENT (przed spółką!)", Colors.HEADER))
+            print(colored("─"*60, Colors.CYAN))
+            
+            print(colored("\n💡 EDUKACJA:", Colors.YELLOW))
+            print("   Founders Agreement (FA) to dokument PRZED założeniem spółki.")
+            print("   Określa zasady współpracy w fazie testowej.")
+            print("   Typowo podpisuje się FA na okres próbny (3-6 mies.)")
+            print("   zanim zainwestujecie czas/pieniądze w formalną spółkę.\n")
+            
+            print(f"  {colored('1', Colors.GREEN)}. ✅ TAK - Podpisujemy FA na okres próbny")
+            print("     • Określamy zasady na 3-6 miesięcy")
+            print("     • Chroni obie strony")
+            print("     • Koszt: 0-2000 PLN\n")
+            print(f"  {colored('2', Colors.YELLOW)}. ⚠️ NIE - Zaczynamy bez umowy")
+            print("     • Szybszy start")
+            print("     • RYZYKO: Konflikty bez podstawy prawnej")
+            print("     • 67% konfliktów founderów wynika z braku FA\n")
+            print(f"  {colored('3', Colors.CYAN)}. 📝 PÓŹNIEJ - Podpiszemy jak założymy spółkę")
+            print("     • Częsty wybór, ale ryzykowny")
+            print("     • Każdy miesiąc bez umowy = rosnące ryzyko")
+            
+            fa_choice = self._ask_choice("Czy podpisać FA?", ["Tak", "Nie", "Później"])
+            
+            if fa_choice == 0:  # Tak
+                self.config.fa_signed = True
+                trial = int(self._ask_number("Okres próbny (miesiące)", 3, 12, 6))
+                self.config.fa_trial_months = trial
+                
+                print(colored("\n  Co się stanie po okresie próbnym?", Colors.YELLOW))
+                print(f"    {colored('1', Colors.GREEN)}. Rozchodzimy się bez roszczeń")
+                print(f"    {colored('2', Colors.CYAN)}. Przedłużamy FA")
+                print(f"    {colored('3', Colors.YELLOW)}. Automatyczne założenie spółki")
+                
+                end_choice = self._ask_choice("", ["Rozejście", "Przedłużenie", "Spółka"])
+                self.config.fa_end_action = ["dissolve", "extend", "incorporate"][end_choice]
+                
+                print(colored(f"\n✓ Founders Agreement skonfigurowany!", Colors.GREEN))
+                print(f"   • Okres próbny: {trial} miesięcy")
+                print(f"   • Po okresie: {['rozejście bez roszczeń', 'przedłużenie FA', 'założenie spółki'][end_choice]}")
+                print(f"   • Wstępny podział: {self.config.player_equity:.0f}%/{self.config.partner_equity:.0f}%/{self.config.esop_pool:.0f}% ESOP")
+            elif fa_choice == 1:  # Nie
+                print(colored("\n⚠️ RYZYKO: Brak FA może prowadzić do konfliktów!", Colors.RED))
+                print(colored("   Rozważ podpisanie FA gdy tylko nabierzecie pewności.", Colors.YELLOW))
+            else:  # Później
+                print(colored("\n📝 Pamiętaj o podpisaniu SHA po założeniu spółki!", Colors.YELLOW))
+        
         # ETAP 4: Forma prawna
         print(colored("\n\nETAP 4/8: Forma prawna", Colors.HEADER))
         print(colored("\n  1. PSA - ZALECANA dla startupów", Colors.GREEN))
@@ -2066,6 +2119,19 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         self.game_state.company = company
         self.game_state.founders_agreement = FoundersAgreement()
         self.game_state.mvp_progress = 100 if self.config.player_has_mvp else 0
+        
+        # Inicjalizuj FA (Founders Agreement) jeśli podpisany
+        if getattr(self.config, 'fa_signed', False):
+            self.game_state.founders_agreement.fa_signed = True
+            self.game_state.founders_agreement.fa_signed_month = 0
+            self.game_state.founders_agreement.trial_period_months = getattr(self.config, 'fa_trial_months', 6)
+            self.game_state.founders_agreement.trial_end_action = getattr(self.config, 'fa_end_action', 'dissolve')
+            # Zapisz wstępny podział equity
+            self.game_state.founders_agreement.preliminary_equity_split = {
+                self.config.player_name: self.config.player_equity,
+            }
+            for p in getattr(self, 'partners_data', []):
+                self.game_state.founders_agreement.preliminary_equity_split[p['name']] = p.get('equity', 0)
         
         # Inicjalizuj model biznesowy i analizę rynku
         business_model_type = getattr(self.config, 'business_model_type', 'saas')
