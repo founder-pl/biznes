@@ -207,55 +207,69 @@ class ActionSystem:
         if not player:
             return False, "Brak gracza w spółce - nie można dodać wspólnika.", {}
 
-        partner_name = self.config.partner_name or "Partner"
-        partner_role = "business" if player.role == "technical" else "technical"
-        partner_capital = float(
-            getattr(self.config, "partner_capital", 0.0)
-            or getattr(self.config, "partner_brings_capital", 0.0)
-            or 0.0
-        )
+        print(colored("\n👥 DODAJ WSPÓLNIKA", Colors.HEADER))
 
-        desired_partner_equity = float(getattr(self.config, "partner_equity", 40.0) or 40.0)
-        desired_partner_equity = max(1.0, min(90.0, desired_partner_equity))
+        partner_name = input(colored("Imię wspólnika [Partner]: ", Colors.YELLOW)).strip() or "Partner"
 
-        total_existing_equity = sum(f.equity_percentage for f in company.founders) + company.esop_pool_percentage
-        if total_existing_equity <= 0:
-            total_existing_equity = 100.0
+        print(colored("\nRola", Colors.CYAN))
+        print(f"  {colored('1', Colors.GREEN)}. Technical")
+        print(f"  {colored('2', Colors.GREEN)}. Business")
+        role_choice = input(colored("Twój wybór [1]: ", Colors.YELLOW)).strip() or "1"
+        role = "technical" if role_choice == "1" else "business"
 
-        scale = (100.0 - desired_partner_equity) / total_existing_equity
-        for f in company.founders:
-            f.equity_percentage *= scale
-        company.esop_pool_percentage *= scale
+        while True:
+            raw = input(colored("Kapitał wnoszony (PLN) [0]: ", Colors.YELLOW)).strip() or "0"
+            try:
+                partner_capital = float(raw)
+                partner_capital = max(0.0, min(1000000.0, partner_capital))
+                break
+            except ValueError:
+                print(colored("Podaj liczbę.", Colors.RED))
+
+        while True:
+            raw = input(colored("Proponowane equity % [20]: ", Colors.YELLOW)).strip() or "20"
+            try:
+                partner_equity = float(raw)
+                partner_equity = max(5.0, min(45.0, partner_equity))
+                break
+            except ValueError:
+                print(colored("Podaj liczbę.", Colors.RED))
+
+        print(colored("\n🔍 WERYFIKACJA (KRYTYCZNE!):", Colors.YELLOW))
+        krs = input(colored("Sprawdziłeś w KRS? (tak/nie) [nie]: ", Colors.YELLOW)).strip().lower() or "nie"
+        krs_verified = krs in ["tak", "t", "yes", "y", "1"]
+        if not krs_verified:
+            print(colored("⚠️ RYZYKO: Możesz nie wiedzieć o upadłościach!", Colors.RED))
 
         partner = Founder(
             name=partner_name,
-            role=partner_role,
-            equity_percentage=desired_partner_equity,
+            role=role,
+            equity_percentage=partner_equity,
             initial_investment=partner_capital,
             personal_invested=partner_capital,
-            experience_years=int(getattr(self.config, "partner_experience_years", 0) or 0),
-            contacts_count=int(getattr(self.config, "partner_contacts_count", 0) or 0),
-            krs_verified=bool(getattr(self.config, "partner_krs_verified", False)),
-            debtor_registry_verified=bool(getattr(self.config, "partner_debts_verified", False)),
+            krs_verified=krs_verified,
             is_player=False,
         )
         company.founders.append(partner)
-        if partner_capital:
-            company.cash_on_hand += partner_capital
+        company.cash_on_hand += partner_capital
+
+        player.equity_percentage = max(0.0, player.equity_percentage - partner_equity)
 
         self.config.has_partner = True
         self.config.partner_name = partner.name
         self.config.partner_equity = partner.equity_percentage
+        self.config.partner_capital = partner_capital
+        self.config.partner_krs_verified = krs_verified
         self.config.player_equity = player.equity_percentage
         self.config.esop_pool = company.esop_pool_percentage
 
-        msg = f"Dodano wspólnika: {partner.name} ({desired_partner_equity:.0f}%)"
+        msg = f"Dodano wspólnika {partner.name} ({partner_equity:.0f}%)"
         if not self.state.agreement_signed:
             msg += " Teraz podpisz SHA."
 
         return True, msg, {
-            'partner_added': True,
             'cash': partner_capital,
+            'equity_change': -partner_equity,
         }
     
     def get_available_actions(self) -> List[GameAction]:

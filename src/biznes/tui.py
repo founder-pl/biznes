@@ -22,6 +22,14 @@ from .core.models import (
 )
 
 
+def _pluralize_months(n: int) -> str:
+    if n == 1:
+        return "1 miesiąc"
+    if 2 <= n <= 4:
+        return f"{n} miesiące"
+    return f"{n} miesięcy"
+
+
 def get_risk_indicators(game_state: GameState, config: Optional[PlayerConfig]) -> str:
     c = game_state.company
     risks = []
@@ -646,7 +654,7 @@ class GameScreen(Screen):
         if c.runway_months() < 6:
             return (
                 "💰 WYDŁUŻ RUNWAY",
-                f"Masz tylko {c.runway_months()} miesięcy runway",
+                f"Masz tylko {_pluralize_months(c.runway_months())} runway",
                 "Zalecane minimum to 6 miesięcy",
             )
 
@@ -660,7 +668,11 @@ class GameScreen(Screen):
         c = self.game_state.company
         month = self.game_state.current_month
 
-        net_burn = c.monthly_burn_rate - c.mrr
+        effective_mrr = c.mrr
+        if getattr(self.game_state, "revenue_advance_months", 0) > 0:
+            effective_mrr = max(0.0, c.mrr - getattr(self.game_state, "revenue_advance_mrr", 0.0))
+
+        net_burn = c.monthly_burn_rate - effective_mrr
         projected_cash = c.cash_on_hand - net_burn
 
         if projected_cash < 0:
@@ -674,7 +686,7 @@ class GameScreen(Screen):
             warnings.append({
                 "level": "HIGH",
                 "title": "NISKI RUNWAY",
-                "message": f"Pozostało tylko {c.runway_months()} miesięcy",
+                "message": f"Pozostało tylko {_pluralize_months(c.runway_months())}",
                 "action": "Zacznij szukać inwestora lub klientów",
             })
 
@@ -717,8 +729,18 @@ class GameScreen(Screen):
 
         c = self.game_state.company
 
-        net_burn = c.monthly_burn_rate - c.mrr
+        effective_mrr = c.mrr
+        if getattr(self.game_state, "revenue_advance_months", 0) > 0:
+            effective_mrr = max(0.0, c.mrr - getattr(self.game_state, "revenue_advance_mrr", 0.0))
+
+        net_burn = c.monthly_burn_rate - effective_mrr
         c.cash_on_hand -= net_burn
+
+        if getattr(self.game_state, "revenue_advance_months", 0) > 0:
+            self.game_state.revenue_advance_months -= 1
+            if self.game_state.revenue_advance_months <= 0:
+                self.game_state.revenue_advance_months = 0
+                self.game_state.revenue_advance_mrr = 0.0
 
         if c.paying_customers > 0:
             growth = random.uniform(0.02, 0.08)
@@ -961,6 +983,40 @@ class GameScreen(Screen):
                 'risks': ["Strata trakcji", "Strata klientów"],
                 'warning': "⚠️ 6+ mies bez PMF - rozważ zmianę kierunku"
             })
+
+        if c.runway_months() < 2:
+            actions.append({
+                'id': 'cut_costs', 'name': '🔻 Obetnij koszty',
+                'description': "Zmniejsz burn rate o 30-50%",
+                'available': True,
+                'recommended': True,
+                'consequences': ["Burn -30-50%", "Możliwe zwolnienia"],
+                'benefits': ["Wydłużony runway"],
+                'risks': ["Wolniejszy rozwój"],
+                'warning': "⚠️ TRYB PRZETRWANIA"
+            })
+
+            actions.append({
+                'id': 'emergency_funding', 'name': '💸 Pożyczka ratunkowa',
+                'description': "Szybka pożyczka na przetrwanie",
+                'available': True,
+                'consequences': ["Dług: 10-20k PLN", "Oprocentowanie 15-20%"],
+                'benefits': ["Natychmiastowa gotówka"],
+                'risks': ["Obciążenie finansowe"],
+                'warning': "⚠️ OSTATECZNOŚĆ"
+            })
+
+            if c.mrr > 0:
+                active = getattr(self.game_state, 'revenue_advance_months', 0) > 0
+                actions.append({
+                    'id': 'revenue_advance', 'name': '💰 Zaliczka na przychody',
+                    'description': "Sprzedaj przyszłe przychody za gotówkę teraz",
+                    'available': (c.mrr >= 1000) and (not active),
+                    'blocked': 'Masz już aktywną zaliczkę lub MRR < 1000' if ((c.mrr < 1000) or active) else '',
+                    'consequences': [f"Otrzymasz ~{c.mrr * 3:,.0f} PLN", "Stracisz 3 mies. MRR"],
+                    'benefits': ["Szybka gotówka bez długu"],
+                    'risks': ["Mniejszy cashflow przez 3 mies."]
+                })
         
         actions.append({
             'id': 'skip', 'name': '⏭️ Pomiń (następny miesiąc)',
@@ -1062,6 +1118,40 @@ class GameScreen(Screen):
             c.mrr = c.mrr // 2
             effect_msg = "Pivot! -40% MVP, -50% klientów"
             self._log_action(action['name'], effect_msg)
+
+        elif action['id'] == 'cut_costs':
+            reduction = random.uniform(0.3, 0.5)
+            old_burn = c.monthly_burn_rate
+            c.monthly_burn_rate = int(c.monthly_burn_rate * (1 - reduction))
+            saved = old_burn - c.monthly_burn_rate
+            effect_msg = f"Burn -{reduction*100:.0f}% ({saved:,.0f} PLN/mies)"
+            self._log_action(action['name'], effect_msg)
+
+        elif action['id'] == 'emergency_funding':
+            amount = random.randint(10000, 20000)
+            payment = int(amount * 0.015)
+            c.cash_on_hand += amount
+            c.monthly_burn_rate += payment
+            effect_msg = f"+{amount:,.0f} PLN, rata ~{payment:,.0f}/mies"
+            self._log_action(action['name'], effect_msg)
+
+        elif action['id'] == 'revenue_advance':
+            if c.mrr <= 0:
+                effect_msg = "Brak MRR"
+                self._log_action(action['name'], effect_msg)
+            elif c.mrr < 1000:
+                effect_msg = "MRR < 1000"
+                self._log_action(action['name'], effect_msg)
+            elif getattr(self.game_state, 'revenue_advance_months', 0) > 0:
+                effect_msg = "Aktywna zaliczka"
+                self._log_action(action['name'], effect_msg)
+            else:
+                advance = c.mrr * 3
+                c.cash_on_hand += advance
+                self.game_state.revenue_advance_months = 3
+                self.game_state.revenue_advance_mrr = c.mrr
+                effect_msg = f"+{advance:,.0f} PLN (3x MRR)"
+                self._log_action(action['name'], effect_msg)
 
         after_state = self._get_state_snapshot()
         self.actions_this_month += 1
@@ -1177,10 +1267,12 @@ class GameScreen(Screen):
         return lines
     
     def _log_action(self, name: str, effect: str) -> None:
+        short_name = name[:35]
+        short_effect = (effect[:27] + "...") if len(effect) > 30 else effect
         self.action_history.append({
             'month': self.game_state.current_month,
-            'name': name,
-            'effect': effect
+            'name': short_name,
+            'effect': short_effect
         })
     
     def action_next_month(self) -> None:
@@ -1285,7 +1377,7 @@ class FinanceScreen(Screen):
             Static(f"ARR: {c.mrr * 12:,.0f} PLN"),
             Static(f"Burn rate: {c.monthly_burn_rate:,.0f} PLN/mies"),
             Static(f"Gotówka: {c.cash_on_hand:,.0f} PLN"),
-            Static(f"Runway: {c.runway_months()} miesięcy"),
+            Static(f"Runway: {_pluralize_months(c.runway_months())}"),
             Static(f"Wycena: {c.current_valuation:,.0f} PLN"),
             Rule(),
             Button("← Wróć", id="back"),

@@ -1,3 +1,15 @@
+## [1.0.4] - 2026-01-30
+
+### Summary
+
+feat(None): configuration management system
+
+### Core
+
+- update src/biznes/shell.py
+- update src/biznes/tui.py
+
+
 ## [1.0.3] - 2026-01-29
 
 ### Summary
