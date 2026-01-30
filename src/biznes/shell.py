@@ -23,6 +23,11 @@ from .core.models import (
     FoundersAgreement, VestingSchedule
 )
 from .scenarios.engine import ScenarioEngine
+from .utils.guidance import (
+    get_priority_action as _get_priority_action_shared,
+    get_risk_indicators as _get_risk_indicators_shared,
+    pluralize_months as _pluralize_months_shared,
+)
 
 
 # ============================================================================
@@ -53,11 +58,7 @@ def colored(text: str, color: str) -> str:
 
 
 def _pluralize_months(n: int) -> str:
-    if n == 1:
-        return "1 miesiąc"
-    if 2 <= n <= 4:
-        return f"{n} miesiące"
-    return f"{n} miesięcy"
+    return _pluralize_months_shared(n)
 
 
 def print_box(title: str, content: List[str], color: str = Colors.CYAN):
@@ -772,34 +773,7 @@ class BiznesShell(cmd.Cmd):
         """Zwraca wizualne wskaźniki ryzyka"""
         if not self.game_state:
             return ""
-        
-        c = self.game_state.company
-        risks = []
-        
-        # Runway
-        runway = c.runway_months()
-        if runway < 3:
-            risks.append("🔴 RUNWAY: KRYTYCZNY!")
-        elif runway < 6:
-            risks.append("🟡 RUNWAY: NISKI")
-        
-        # SHA
-        if self._has_partner() and not self.game_state.agreement_signed:
-            risks.append("🔴 SHA: BRAK UMOWY!")
-        
-        # Spółka
-        if not c.registered and self.game_state.current_month > 3:
-            risks.append("🟡 SPÓŁKA: NIEZAREJESTROWANA")
-        
-        # PMF
-        if self.game_state.current_month > 6 and c.paying_customers < 5:
-            risks.append("🟠 PMF: BRAK TRAKCJI")
-        
-        # MVP
-        if not c.mvp_completed and self.game_state.current_month > 4:
-            risks.append("🟡 MVP: NIEUKOŃCZONE")
-        
-        return " | ".join(risks) if risks else "✅ Brak krytycznych ryzyk"
+        return _get_risk_indicators_shared(self.game_state, self.config)
     
     # ========================================================================
     # P0: PRIORYTET TERAZ - CO JEST NAJWAŻNIEJSZE
@@ -809,65 +783,7 @@ class BiznesShell(cmd.Cmd):
         """Zwraca (akcja, dlaczego, konsekwencja_braku)"""
         if not self.game_state:
             return ("", "", "")
-        
-        c = self.game_state.company
-        month = self.game_state.current_month
-        
-        # Hierarchia priorytetów (od najważniejszego)
-        
-        # 1. Krytyczny runway
-        if c.runway_months() < 3:
-            return (
-                "🚨 SZUKAJ FINANSOWANIA LUB KLIENTÓW",
-                f"Masz mniej niż 3 miesiące runway ({c.runway_months()} mies)",
-                f"Bez działania: BANKRUCTWO w ~{c.runway_months()} mies"
-            )
-        
-        # 2. Brak SHA z partnerem
-        if self._has_partner() and not self.game_state.agreement_signed:
-            return (
-                "📝 PODPISZ SHA (umowę wspólników)",
-                "Bez umowy partner może odejść z kodem/klientami",
-                "Bez SHA: 40% startupów z konfliktami founderów upada"
-            )
-        
-        # 3. Niezarejestrowana spółka
-        if not c.registered and month > 2:
-            return (
-                "🏢 ZAREJESTRUJ SPÓŁKĘ",
-                "Bez spółki nie możesz legalnie pozyskać inwestora",
-                "Bez rejestracji: Brak ochrony prawnej, odpowiadasz osobiście"
-            )
-        
-        # 4. Brak MVP
-        if not c.mvp_completed:
-            return (
-                "🔧 DOKOŃCZ MVP",
-                "Bez produktu nie zdobędziesz klientów",
-                "Bez MVP: Spalisz gotówkę bez walidacji pomysłu"
-            )
-        
-        # 5. Brak klientów po MVP
-        if c.mvp_completed and c.paying_customers < 10:
-            return (
-                "🎯 ZDOBĄDŹ KLIENTÓW",
-                "Klienci = walidacja + MRR",
-                "Bez klientów: Brak dowodu PMF dla inwestorów"
-            )
-        
-        # 6. Niski runway (ale nie krytyczny)
-        if c.runway_months() < 6:
-            return (
-                "💰 WYDŁUŻ RUNWAY",
-                f"Masz tylko {_pluralize_months(c.runway_months())} runway",
-                "Zalecane minimum to 6 miesięcy"
-            )
-        
-        return (
-            "📈 ROZWIJAJ BIZNES",
-            "Masz podstawy, teraz skaluj",
-            ""
-        )
+        return _get_priority_action_shared(self.game_state, self.config)
     
     def _show_priority_box(self):
         """Pokazuje najważniejszą akcję do wykonania"""
