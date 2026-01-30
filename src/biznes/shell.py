@@ -1098,7 +1098,7 @@ class BiznesShell(cmd.Cmd):
                 if self.game_state.player_role != m.requires_skill:
                     rate = max(0.05, min(0.99, rate - 0.2))
 
-            ok_cash = company.cash_on_hand >= float(m.cost)
+            ok_cash = (float(m.cost) <= 0) or (company.cash_on_hand >= float(m.cost))
             ok_time = remaining_points >= int(m.time_cost)
             available = ok_cash and ok_time
 
@@ -1125,7 +1125,7 @@ class BiznesShell(cmd.Cmd):
             if not raw:
                 # domyślny: pierwszy dostępny
                 for _, m in modes:
-                    if company.cash_on_hand >= float(m.cost) and remaining_points >= int(m.time_cost):
+                if (float(m.cost) <= 0 or company.cash_on_hand >= float(m.cost)) and remaining_points >= int(m.time_cost):
                         return m
                 return None
             try:
@@ -1136,7 +1136,7 @@ class BiznesShell(cmd.Cmd):
 
             if 0 <= idx < len(modes):
                 _, m = modes[idx]
-                if company.cash_on_hand < float(m.cost):
+                if float(m.cost) > 0 and company.cash_on_hand < float(m.cost):
                     print(colored("Brak gotówki na ten tryb.", Colors.RED))
                     continue
                 if remaining_points < int(m.time_cost):
@@ -1387,15 +1387,25 @@ class BiznesShell(cmd.Cmd):
         print(colored("│ 💡 CO TO OZNACZA:", Colors.BOLD))
         
         if action.id == "register_company":
-            print("│    • Możesz teraz legalnie wystawiać faktury")
-            print("│    • Twój majątek osobisty jest chroniony")
-            print("│    • Możesz rozmawiać z inwestorami")
-            print(colored("│    ⚠️ PAMIĘTAJ: Od teraz masz obowiązki księgowe!", Colors.YELLOW))
+            if success:
+                print("│    • Możesz teraz legalnie wystawiać faktury")
+                print("│    • Twój majątek osobisty jest chroniony")
+                print("│    • Możesz rozmawiać z inwestorami")
+                print(colored("│    ⚠️ PAMIĘTAJ: Od teraz masz obowiązki księgowe!", Colors.YELLOW))
+            else:
+                print("│    • Rejestracja nie powiodła się")
+                print(colored("│    💡 PORADA: Zbierz więcej środków i spróbuj ponownie", Colors.YELLOW))
         elif action.id == "sign_agreement":
-            print("│    • Masz jasne zasady podziału equity")
-            print("│    • Vesting chroni przed odejściem partnera")
-            print("│    • Możesz bezpiecznie szukać inwestora")
-            print(colored("│    ✓ BRAWO: To kluczowa decyzja dla stabilności!", Colors.GREEN))
+            if success:
+                print("│    • Masz jasne zasady podziału equity")
+                print("│    • Vesting chroni przed odejściem partnera")
+                print("│    • Możesz bezpiecznie szukać inwestora")
+                print(colored("│    ✓ BRAWO: To kluczowa decyzja dla stabilności!", Colors.GREEN))
+            else:
+                print("│    • Negocjacje z partnerem nie powiodły się")
+                print("│    • Pieniądze wydane na prawnika przepadły")
+                print(colored("│    💡 PORADA: Spróbuj ponownie z innym trybem", Colors.YELLOW))
+                print(colored("│    ⚠️ Bez SHA nadal ryzykujesz konflikty!", Colors.RED))
         elif action.id == "develop_mvp":
             if after_state.get('mvp_progress', 0) >= 100:
                 print("│    • 🎉 MVP UKOŃCZONE! Możesz szukać klientów")
@@ -2177,6 +2187,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                 return
         
         self.game_state.current_month += 1
+        self.game_state.cut_costs_this_month = False
         self.actions_this_month = 0  # zużyte punkty akcji
         self.actions_taken_this_month = 0
         self._recalculate_action_points()

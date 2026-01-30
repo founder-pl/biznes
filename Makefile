@@ -37,7 +37,7 @@ dev:
 	pip install -e ".[dev]"
 
 test:
-	python -m pytest -q
+	python3 -m pytest -q
 
 build: clean
 	python -m pip install --upgrade build twine
