@@ -445,11 +445,69 @@ class GameState:
         self.company.months_active += 1
         
         # Aktualizuj vesting dla founderów
+        vesting = self.founders_agreement.vesting_schedule
         for founder in self.company.founders:
             if not founder.left_company:
                 founder.months_in_company += 1
+                # Aktualizuj vested_percentage na podstawie harmonogramu
+                if self.founders_agreement.signed:
+                    founder.vested_percentage = vesting.calculate_vested(founder.months_in_company)
+                    if founder.months_in_company >= vesting.cliff_months:
+                        founder.cliff_completed = True
                 
         self.last_saved = datetime.now()
+
+    def process_founder_leaving(self, founder: "Founder", is_good_leaver: bool) -> Dict[str, Any]:
+        """Obsługuje odejście foundera (good/bad leaver)"""
+        if founder.left_company:
+            return {"error": "Founder już odszedł"}
+
+        founder.left_company = True
+        founder.left_month = self.current_month
+        founder.is_good_leaver = is_good_leaver
+
+        result = {
+            "founder_name": founder.name,
+            "is_good_leaver": is_good_leaver,
+            "months_in_company": founder.months_in_company,
+            "cliff_completed": founder.cliff_completed,
+        }
+
+        if not self.founders_agreement.signed or not self.founders_agreement.has_good_bad_leaver:
+            # Brak SHA lub klauzuli → founder zachowuje 100% equity (RYZYKO!)
+            result["equity_kept"] = founder.equity_percentage
+            result["equity_returned"] = 0.0
+            result["warning"] = "Brak SHA/klauzuli good-bad leaver - founder zachowuje całe equity!"
+        elif is_good_leaver:
+            # Good leaver: zachowuje vested equity
+            kept = (founder.vested_percentage / 100.0) * founder.equity_percentage
+            returned = founder.equity_percentage - kept
+            founder.equity_percentage = kept
+            result["equity_kept"] = kept
+            result["equity_returned"] = returned
+        else:
+            # Bad leaver: traci wszystko lub tylko unvested (zależy od klauzuli)
+            if founder.cliff_completed:
+                # Po cliffie: zachowuje vested, ale z dyskontem
+                kept = (founder.vested_percentage / 100.0) * founder.equity_percentage * 0.5
+            else:
+                # Przed cliffem: traci wszystko
+                kept = 0.0
+            returned = founder.equity_percentage - kept
+            founder.equity_percentage = kept
+            result["equity_kept"] = kept
+            result["equity_returned"] = returned
+
+        # Redystrybucja zwróconego equity do pozostałych founderów
+        if result.get("equity_returned", 0) > 0:
+            active_founders = [f for f in self.company.founders if not f.left_company]
+            if active_founders:
+                share = result["equity_returned"] / len(active_founders)
+                for f in active_founders:
+                    f.equity_percentage += share
+                result["redistributed_to"] = len(active_founders)
+
+        return result
     
     def get_summary(self) -> Dict[str, Any]:
         """Zwraca podsumowanie stanu gry"""

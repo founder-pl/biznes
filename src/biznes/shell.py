@@ -537,6 +537,23 @@ class ActionSystem:
             risks=["Konflikty wizji"],
             warning="⚠️ Weryfikuj w KRS!"
         ))
+
+        # Rozstanie z partnerem (jeśli jest partner)
+        if has_partner:
+            partner = next((f for f in company.founders if not f.is_player and not f.left_company), None)
+            if partner:
+                vesting_info = f"Vested: {partner.vested_percentage:.0f}%" if self.state.agreement_signed else "Brak vestingu (brak SHA)"
+                actions.append(GameAction(
+                    id="partner_leaves",
+                    name="Rozstanie z partnerem",
+                    description=f"Partner odchodzi ze spółki ({vesting_info})",
+                    category="partner",
+                    available=True,
+                    consequences=["Zmiana struktury equity", "Potencjalny konflikt"],
+                    benefits=["Pełna kontrola", "Brak sporów o wizję"],
+                    risks=["Utrata kompetencji", "Bez SHA: partner zachowuje equity!"],
+                    warning="⚠️ Sprawdź klauzulę good/bad leaver!" if self.state.agreement_signed else "⚠️ BRAK SHA - RYZYKO!"
+                ))
         
         # SPECJALNE
         actions.append(GameAction(
@@ -681,6 +698,7 @@ class ActionSystem:
             reduction = random.uniform(0.3, 0.5)
             company.cost_multiplier *= (1 - reduction)
             burn_delta = _recalc_burn_delta(before_burn)
+            saved = max(0.0, -burn_delta)
             return True, f"Burn obcięty o {reduction*100:.0f}%! Oszczędność: {saved:,.0f} PLN/mies", {
                 'burn': burn_delta
             }
@@ -717,6 +735,43 @@ class ActionSystem:
             company.paying_customers //= 2
             company.mrr //= 2
             return True, "Pivot wykonany! Stracono połowę klientów.", {}
+
+        elif action_id == "partner_leaves":
+            partner = next((f for f in company.founders if not f.is_player and not f.left_company), None)
+            if not partner:
+                return False, "Nie masz partnera.", {}
+
+            print(colored("\n⚖️ ROZSTANIE Z PARTNEREM", Colors.HEADER))
+            print(f"Partner: {partner.name}")
+            print(f"Equity: {partner.equity_percentage:.1f}%")
+            print(f"Miesiące w spółce: {partner.months_in_company}")
+            print(f"Vested: {partner.vested_percentage:.1f}%")
+            print(f"Cliff ukończony: {'Tak' if partner.cliff_completed else 'Nie'}")
+
+            if self.state.agreement_signed and self.state.founders_agreement.has_good_bad_leaver:
+                print(colored("\n📋 Masz klauzulę good/bad leaver w SHA.", Colors.GREEN))
+                print(colored("  1. Good leaver", Colors.GREEN) + " - partner zachowa vested equity")
+                print(colored("  2. Bad leaver", Colors.RED) + " - partner straci część/całość equity")
+            else:
+                print(colored("\n⚠️ BRAK KLAUZULI GOOD/BAD LEAVER!", Colors.RED))
+                print("Partner zachowa CAŁE swoje equity niezależnie od okoliczności!")
+
+            choice = input(colored("\nTyp rozstania (1=good, 2=bad, 0=anuluj): ", Colors.YELLOW)).strip()
+            if choice == "0":
+                return False, "Anulowano.", {}
+
+            is_good = choice != "2"
+            result = self.state.process_founder_leaving(partner, is_good)
+
+            if "warning" in result:
+                print(colored(f"\n⚠️ {result['warning']}", Colors.RED))
+
+            msg = f"Partner {partner.name} odszedł jako {'good' if is_good else 'bad'} leaver.\n"
+            msg += f"Zachował: {result['equity_kept']:.1f}% equity\n"
+            msg += f"Zwrócono do puli: {result['equity_returned']:.1f}%"
+
+            self.config.has_partner = False
+            return True, msg, {'equity_change': result['equity_returned']}
         
         elif action_id == "do_nothing":
             return True, "Kontynuujesz obecną strategię.", {}
@@ -2179,6 +2234,36 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                 'effects': {'risk': 20},
                 'warning': 'Podpisz SHA aby uniknąć!'
             })
+
+        # Zdarzenia związane z vestingiem
+        if self._has_partner() and self.game_state.agreement_signed:
+            partner = next((f for f in company.founders if not f.is_player and not f.left_company), None)
+            if partner:
+                vesting = self.game_state.founders_agreement.vesting_schedule
+                # Cliff approaching
+                if partner.months_in_company == vesting.cliff_months - 1:
+                    events.append({
+                        'type': 'neutral', 'name': '📅 Cliff za miesiąc',
+                        'desc': f'{partner.name} osiągnie cliff w następnym miesiącu ({vesting.cliff_percentage}% vested).',
+                        'effects': {},
+                        'info': True
+                    })
+                # Cliff completed
+                elif partner.months_in_company == vesting.cliff_months:
+                    events.append({
+                        'type': 'positive', 'name': '🎉 Cliff ukończony!',
+                        'desc': f'{partner.name} osiągnął cliff - {vesting.cliff_percentage}% equity jest teraz vested.',
+                        'effects': {},
+                        'info': True
+                    })
+                # Partner unhappy (random chance after 6 months)
+                elif partner.months_in_company > 6 and random.random() < 0.1:
+                    events.append({
+                        'type': 'negative', 'name': '😤 Partner niezadowolony',
+                        'desc': f'{partner.name} rozważa odejście ze spółki.',
+                        'effects': {'risk': 15},
+                        'warning': f'Vested: {partner.vested_percentage:.0f}% - sprawdź klauzulę leaver!'
+                    })
         
         if company.runway_months() < 4:
             events.append({
@@ -2394,12 +2479,24 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             print(colored("Najpierw 'start'", Colors.RED))
             return
         c = self.game_state.company
+        self._recalculate_company_burn()
+
+        breakdown = self._cost_calc.calculate_monthly_burn(self.game_state)
+        total = sum(breakdown.values())
+        cost_lines: List[str] = []
+        if breakdown:
+            for k, v in sorted(breakdown.items(), key=lambda x: -x[1]):
+                cost_lines.append(f"{k}: {v:,.0f} PLN")
+        cost_summary = ", ".join(cost_lines[:3])
+        if len(cost_lines) > 3:
+            cost_summary += ", ..."
         print_box("FINANSE", [
             f"MRR: {c.mrr:,.0f} PLN | ARR: {c.mrr*12:,.0f} PLN",
             f"Burn: {c.monthly_burn_rate:,.0f} PLN/mies",
             f"Gotówka: {c.cash_on_hand:,.0f} PLN",
             f"Runway: {c.runway_months()} mies",
-            f"Wycena: {c.current_valuation:,.0f} PLN"
+            f"Wycena: {c.current_valuation:,.0f} PLN",
+            f"Koszty (top): {cost_summary}" if breakdown else "Koszty: (brak danych)"
         ])
     
     def do_portfele(self, arg):
@@ -2634,6 +2731,21 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         self.game_state.agreement_signed = data.get('agreement_signed', False)
         self.game_state.mvp_progress = data.get('mvp_progress', 0)
 
+        if 'founder_living_cost' in data:
+            self.game_state.company.founder_living_cost = float(data.get('founder_living_cost', 3000.0) or 3000.0)
+        if 'cost_multiplier' in data:
+            self.game_state.company.cost_multiplier = float(data.get('cost_multiplier', 1.0) or 1.0)
+
+        if 'extra_monthly_costs' in data:
+            self.game_state.company.extra_monthly_costs = float(data.get('extra_monthly_costs', 0.0) or 0.0)
+        else:
+            burn = float(data.get('burn', self.config.monthly_burn) or self.config.monthly_burn)
+            base = float(getattr(self.game_state.company, 'founder_living_cost', 3000.0) or 3000.0)
+            self.game_state.company.extra_monthly_costs = max(0.0, burn - base)
+
+        self._recalculate_company_burn()
+        self._recalculate_action_points()
+
         self.game_state.revenue_advance_months = int(data.get('revenue_advance_months', 0) or 0)
         self.game_state.revenue_advance_mrr = float(data.get('revenue_advance_mrr', 0.0) or 0.0)
 
@@ -2704,6 +2816,9 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             'cash': self.game_state.company.cash_on_hand,
             'mrr': self.game_state.company.mrr,
             'burn': self.game_state.company.monthly_burn_rate,
+            'founder_living_cost': getattr(self.game_state.company, 'founder_living_cost', 3000.0),
+            'cost_multiplier': getattr(self.game_state.company, 'cost_multiplier', 1.0),
+            'extra_monthly_costs': getattr(self.game_state.company, 'extra_monthly_costs', 0.0),
             'customers': self.game_state.company.paying_customers,
             'registered': self.game_state.company.registered,
             'mvp_completed': self.game_state.company.mvp_completed,

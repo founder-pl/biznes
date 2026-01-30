@@ -897,6 +897,19 @@ class GameScreen(Screen):
                 'benefits': ["Podział obowiązków", "Więcej kompetencji", "Mniejsze ryzyko wypalenia"],
                 'risks': ["Rozwodnienie", "Potencjalne konflikty (podpisz SHA!)"]
             })
+        else:
+            partner = next((f for f in c.founders if not f.is_player and not f.left_company), None)
+            if partner:
+                vesting_info = f"Vested: {partner.vested_percentage:.0f}%" if self.game_state.agreement_signed else "Brak SHA"
+                actions.append({
+                    'id': 'partner_leaves', 'name': '⚖️ Rozstanie z partnerem',
+                    'description': f"Partner odchodzi ({vesting_info})",
+                    'available': True,
+                    'consequences': ["Zmiana struktury equity"],
+                    'benefits': ["Pełna kontrola"],
+                    'risks': ["Bez SHA: partner zachowuje equity!"],
+                    'warning': "⚠️ Sprawdź klauzulę leaver!" if self.game_state.agreement_signed else "⚠️ BRAK SHA!"
+                })
         
         # PRODUKT
         if not c.mvp_completed:
@@ -1044,6 +1057,22 @@ class GameScreen(Screen):
             result = self._invite_partner()
             effect_msg = result[1]
             self._log_action(action['name'], effect_msg)
+
+        elif action['id'] == 'partner_leaves':
+            partner = next((f for f in c.founders if not f.is_player and not f.left_company), None)
+            if partner:
+                # W TUI domyślnie good leaver (uproszczenie)
+                result = self.game_state.process_founder_leaving(partner, is_good_leaver=True)
+                self.app.config.has_partner = False
+                kept = result.get('equity_kept', 0)
+                returned = result.get('equity_returned', 0)
+                effect_msg = f"Partner odszedł. Zachował {kept:.0f}%, zwrócono {returned:.0f}%"
+                if result.get('warning'):
+                    effect_msg += f" ⚠️ {result['warning']}"
+                self._log_action(action['name'], effect_msg)
+            else:
+                effect_msg = "Brak partnera"
+                self._log_action(action['name'], effect_msg)
         
         elif action['id'] == 'mvp':
             progress = random.randint(20, 35)
@@ -1324,6 +1353,24 @@ class GameScreen(Screen):
             events.append(
                 ('negative', '⚔️ Konflikt z partnerem!', 'Spór o podział obowiązków i equity!', lambda: 'Podpisz SHA aby uniknąć!')
             )
+
+        # Zdarzenia związane z vestingiem
+        if _has_partner_shared(self.game_state, self.app.config) and self.game_state.agreement_signed:
+            partner = next((f for f in c.founders if not f.is_player and not f.left_company), None)
+            if partner:
+                vesting = self.game_state.founders_agreement.vesting_schedule
+                if partner.months_in_company == vesting.cliff_months - 1:
+                    events.append(
+                        ('neutral', '📅 Cliff za miesiąc', f'{partner.name} osiągnie cliff w następnym miesiącu.', lambda: f'{vesting.cliff_percentage}% vested')
+                    )
+                elif partner.months_in_company == vesting.cliff_months:
+                    events.append(
+                        ('positive', '🎉 Cliff ukończony!', f'{partner.name} osiągnął cliff.', lambda: f'{vesting.cliff_percentage}% equity vested')
+                    )
+                elif partner.months_in_company > 6 and random.random() < 0.15:
+                    events.append(
+                        ('negative', '😤 Partner niezadowolony', f'{partner.name} rozważa odejście.', lambda: f'Vested: {partner.vested_percentage:.0f}%')
+                    )
         
         event = random.choice(events)
         effect = event[3]()
