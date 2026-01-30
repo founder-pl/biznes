@@ -31,7 +31,7 @@ from .utils.guidance import (
     get_risk_indicators as _get_risk_indicators_shared,
     pluralize_months as _pluralize_months_shared,
 )
-
+from .utils.shell_context import ShellContext
 
 # ============================================================================
 # KOLORY I FORMATOWANIE
@@ -193,7 +193,7 @@ EDUCATIONAL_CONTENT = {
   • Szybszy rozwój produktu/sprzedaży
   • Nowe kompetencje w zespole
   ALE: +12-15k PLN/mies kosztu, zobowiązania prawne""",
-        "real_world_example": """WhatsApp miał 55 pracowników przy 900M użytkowników.
+        "real_world_example": """WhatsApp miał 55 pracowników przy 900M użytkownikach.
   Instagram: 13 osób przy sprzedaży za 1B$. Mniej = więcej.""",
         "statistics": "Przedwczesne zatrudnianie to #3 powód upadku startupów",
         "common_mistake": """❌ BŁĄD: Zatrudniać przed product-market fit
@@ -466,11 +466,14 @@ class ActionSystem:
             ))
 
         if company.runway_months() < 2:
+            cut_costs_available = not getattr(self.state, "cut_costs_this_month", False)
             actions.append(GameAction(
                 id="cut_costs",
                 name="🔻 Obetnij koszty",
                 description="Zmniejsz burn rate o 30-50%",
                 category="crisis",
+                available=cut_costs_available,
+                blocked_reason="" if cut_costs_available else "Już obciąłeś koszty w tym miesiącu",
                 consequences=["Burn -30-50%", "Możliwe zwolnienia"],
                 benefits=["Wydłużony runway"],
                 risks=["Wolniejszy rozwój"],
@@ -607,6 +610,22 @@ class ActionSystem:
             category="special",
             consequences=["Organiczny wzrost/spadek"]
         ))
+
+        if company.cash_on_hand <= 0:
+            for a in actions:
+                if a.category == "crisis":
+                    continue
+                if a.modes:
+                    has_free_mode = any(float(m.cost) <= 0 for m in a.modes.values())
+                    if not has_free_mode and a.available:
+                        a.available = False
+                        if not a.blocked_reason:
+                            a.blocked_reason = "Brak gotówki"
+                    continue
+                if float(getattr(a, "cost", 0.0) or 0.0) > 0 and a.available:
+                    a.available = False
+                    if not a.blocked_reason:
+                        a.blocked_reason = "Brak gotówki"
         
         return actions
     
@@ -668,21 +687,24 @@ class ActionSystem:
             before_burn = company.monthly_burn_rate
 
             selected = mode or ActionMode(name="🔧 Zrób sam", cost=0, time_cost=1, success_rate=0.7, quality_modifier=1.0)
-            if company.cash_on_hand < selected.cost:
+            if selected.cost > 0 and company.cash_on_hand < selected.cost:
                 return False, f"Brak środków ({selected.cost} PLN)", {}
 
             if selected.cost:
                 company.cash_on_hand -= selected.cost
 
+            rate = _adjusted_success_rate(selected)
             roll = random.random()
-            if roll > _adjusted_success_rate(selected):
+            if roll > rate and float(selected.cost) <= 0:
+                base = random.uniform(4, 10)
+            elif roll > rate:
                 burn_delta = _recalc_burn_delta(before_burn)
                 return False, "Nie udało się posunąć MVP w tym miesiącu.", {
                     'cash': -selected.cost,
                     'burn': burn_delta,
                 }
-
-            base = random.uniform(20, 30)
+            else:
+                base = random.uniform(20, 30)
             progress = int(round(base * float(selected.quality_modifier)))
             progress = max(1, min(40, progress))
 
@@ -758,9 +780,13 @@ class ActionSystem:
             return self._invite_partner(company)
 
         elif action_id == "cut_costs":
+            if getattr(self.state, "cut_costs_this_month", False):
+                return False, "Już obciąłeś koszty w tym miesiącu. Kolejne cięcia wymagają czasu na wdrożenie.", {}
+
             before_burn = company.monthly_burn_rate
-            reduction = random.uniform(0.3, 0.5)
+            reduction = random.uniform(0.15, 0.3)
             company.cost_multiplier *= (1 - reduction)
+            self.state.cut_costs_this_month = True
             burn_delta = _recalc_burn_delta(before_burn)
             saved = max(0.0, -burn_delta)
             return True, f"Burn obcięty o {reduction*100:.0f}%! Oszczędność: {saved:,.0f} PLN/mies", {
@@ -943,10 +969,8 @@ class BiznesShell(cmd.Cmd):
     
     def preloop(self):
         """Wyświetla intro z menu numerycznym"""
-        self._show_main_menu()
-    
-    def _show_main_menu(self):
-        """Wyświetla główne menu z opcjami numerycznymi"""
+        self._ctx.reset_to_main()
+        self._sync_prompt()
         saves = self._get_saved_games()
         
         print(colored('═'*60, Colors.CYAN))
@@ -970,6 +994,13 @@ class BiznesShell(cmd.Cmd):
     def default(self, line):
         """Obsługuje nieznane komendy i wybór numeryczny"""
         line = line.strip()
+
+        if line.lower() in ["..", "back", "b"]:
+            if self.game_state:
+                self._show_game_menu()
+            else:
+                self._show_main_menu()
+            return
         
         # Obsługa menu numerycznego - ZAWSZE działa
         if not self.game_state:
@@ -989,103 +1020,13 @@ class BiznesShell(cmd.Cmd):
             # Menu w grze
             if line in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']:
                 self._handle_game_menu(line)
-            else:
-                print(colored("Wybierz numer z menu", Colors.RED))
-                self._show_game_menu()
-    
-    def _handle_game_menu(self, choice: str):
-        """Obsługuje wybór z menu gry"""
-        if choice == '1':
-            self.do_miesiac("")
-        elif choice == '2':
-            self.do_status("")
-        elif choice == '3':
-            self.do_akcje("")
-        elif choice == '4':
-            self.do_finanse("")
-        elif choice == '5':
-            self.do_portfele("")
-        elif choice == '6':
-            self.do_equity("")
-        elif choice == '7':
-            self.do_ryzyko("")
-        elif choice == '8':
-            self.do_zapisz("")
-        elif choice == '9':
-            self.do_pomoc("")
-        elif choice == '0':
-            if self._ask_yes_no("Zapisać grę przed wyjściem?"):
-                self.do_zapisz("")
-            self.game_state = None
-            self._show_main_menu()
-    
-    def _show_game_menu(self):
-        """Wyświetla menu podczas gry z widocznymi ryzykami"""
-        c = self.game_state.company
-        month = self.game_state.current_month
-        
-        remaining = max(0, self.max_actions_per_month - self.actions_this_month)
-        print(colored(f"\n{'═'*60}", Colors.CYAN))
-        print(colored(f"  Mies. {month} | 💰 {c.cash_on_hand:,.0f} | MRR: {c.mrr:,.0f} | ⏱️ {c.runway_months()} mies | ⚡ {remaining}/{self.max_actions_per_month}", Colors.DIM))
-        print(colored(f"{'═'*60}", Colors.CYAN))
-        
-        # NOWE: Pasek ryzyka ZAWSZE widoczny
-        risk_bar = self._get_risk_indicators()
-        risk_color = Colors.RED if "🔴" in risk_bar else Colors.YELLOW if "🟡" in risk_bar or "🟠" in risk_bar else Colors.GREEN
-        print(colored(f"  ⚠️  {risk_bar}", risk_color))
-        print(colored(f"{'─'*60}", Colors.CYAN))
-        
-        # NOWE: Priorytet teraz
-        self._show_priority_box()
-        
-        print(colored(f"\n{'─'*60}", Colors.CYAN))
-        print(f"  {colored('1', Colors.GREEN)}. ▶️  Następny miesiąc")
-        print(f"  {colored('2', Colors.GREEN)}. 📊 Status")
-        print(f"  {colored('3', Colors.GREEN)}. ⚡ Akcje")
-        print(f"  {colored('4', Colors.GREEN)}. 💰 Finanse")
-        print(f"  {colored('5', Colors.GREEN)}. 💼 Portfele")
-        print(f"  {colored('6', Colors.GREEN)}. 📈 Equity")
-        print(f"  {colored('7', Colors.GREEN)}. ⚠️  Ryzyko")
-        print(f"  {colored('8', Colors.GREEN)}. 💾 Zapisz")
-        print(f"  {colored('9', Colors.GREEN)}. ❓ Pomoc")
-        print(f"  {colored('0', Colors.GREEN)}. 🚪 Wyjście")
-        print()
-    
-    prompt = colored("biznes> ", Colors.GREEN)
-    
-    def __init__(self):
-        super().__init__()
-        self.game_state: Optional[GameState] = None
-        self.config: Optional[PlayerConfig] = None
-        self.action_system: Optional[ActionSystem] = None
-        self.save_dir = Path.home() / ".biznes_saves"
-        self.save_dir.mkdir(exist_ok=True)
-        self.action_history: List[Dict] = []
-        self.actions_this_month: int = 0
-        self.actions_taken_this_month: int = 0
-        self.max_actions_taken_per_month: int = 10
-        self.max_actions_per_month: int = 2
-        self.partners_data: List[Dict] = []  # Dane wielu wspólników
-        self.mentor_mode: bool = True  # P2: Tryb mentor domyślnie włączony
-
-        self._ap_system = ActionPointSystem()
-        self._cost_calc = CostCalculator()
-
-    def _recalculate_company_burn(self) -> None:
-        if not self.game_state:
-            return
-        self.game_state.company.monthly_burn_rate = float(self._cost_calc.total_burn(self.game_state))
-
-    def _recalculate_action_points(self) -> None:
-        if not self.game_state:
-            return
-        self.max_actions_per_month = int(self._ap_system.get_monthly_points(self.game_state))
-
     def _choose_action_mode(self, action: GameAction, remaining_points: int) -> Optional[ActionMode]:
         if not action.modes:
             return None
         if not self.game_state:
             return None
+
+        self._mode_cancelled = False
 
         company = self.game_state.company
 
@@ -1096,17 +1037,14 @@ class BiznesShell(cmd.Cmd):
             rate = float(m.success_rate)
             if m.requires_skill and m.requires_skill not in ["legal", "financial"]:
                 if self.game_state.player_role != m.requires_skill:
-                    rate = max(0.05, min(0.99, rate - 0.2))
-
-            ok_cash = (float(m.cost) <= 0) or (company.cash_on_hand >= float(m.cost))
-            ok_time = remaining_points >= int(m.time_cost)
-            available = ok_cash and ok_time
+                    rate -= 0.2
+            available = (float(m.cost) <= 0 or company.cash_on_hand >= float(m.cost)) and remaining_points >= int(m.time_cost)
 
             status = colored("✓", Colors.GREEN) if available else colored("✗", Colors.RED)
             reason = ""
-            if not ok_cash:
+            if not (float(m.cost) <= 0 or company.cash_on_hand >= float(m.cost)):
                 reason = "brak gotówki"
-            elif not ok_time:
+            elif remaining_points < int(m.time_cost):
                 reason = "brak punktów"
 
             cost_txt = f"{m.cost:,} PLN" if m.cost else "0 PLN"
@@ -1121,7 +1059,11 @@ class BiznesShell(cmd.Cmd):
             print(colored(f"     {meta}", Colors.DIM))
 
         while True:
-            raw = self._ask("Wybierz tryb (Enter = domyślny)", "")
+            print(colored("  [1-n] wybierz tryb | [..] powrót", Colors.DIM))
+            raw = self._prompt_input("")
+            if raw.lower() in ["..", "back", "b"]:
+                self._mode_cancelled = True
+                return None
             if not raw:
                 # domyślny: pierwszy dostępny
                 for _, m in modes:
@@ -1145,1220 +1087,7 @@ class BiznesShell(cmd.Cmd):
                 return m
 
             print(colored("Nieprawidłowy wybór.", Colors.RED))
-    
-    def _ask(self, prompt: str, default: str = "") -> str:
-        if default:
-            prompt = f"{prompt} [{default}]: "
-        else:
-            prompt = f"{prompt}: "
-        try:
-            response = input(colored(prompt, Colors.YELLOW))
-            return response.strip() or default
-        except (EOFError, KeyboardInterrupt):
-            return default
-    
-    def _ask_number(self, prompt: str, min_val: float = 0, max_val: float = float('inf'), default: float = 0) -> float:
-        while True:
-            response = self._ask(f"{prompt} ({min_val}-{max_val})", str(int(default)) if default else "")
-            try:
-                value = float(response) if response else default
-                if min_val <= value <= max_val:
-                    return value
-            except ValueError:
-                pass
-            print(colored(f"Podaj liczbę {min_val}-{max_val}", Colors.RED))
-    
-    def _ask_choice(self, prompt: str, options: List[str]) -> int:
-        print(colored(f"\n{prompt}", Colors.CYAN))
-        for i, option in enumerate(options, 1):
-            print(f"  {colored(str(i), Colors.GREEN)}. {option}")
-        while True:
-            try:
-                idx = int(self._ask("Twój wybór")) - 1
-                if 0 <= idx < len(options):
-                    return idx
-            except ValueError:
-                pass
-            print(colored(f"Wybierz 1-{len(options)}", Colors.RED))
-    
-    def _ask_yes_no(self, prompt: str, default: bool = True) -> bool:
-        response = self._ask(f"{prompt} (tak/nie)", "tak" if default else "nie")
-        return response.lower() in ['tak', 't', 'yes', 'y', '1']
 
-    def _has_partner(self) -> bool:
-        if not self.game_state:
-            return False
-        return any((not f.is_player) and (not f.left_company) for f in self.game_state.company.founders)
-    
-    # ========================================================================
-    # P0: PASEK RYZYKA - ZAWSZE WIDOCZNY
-    # ========================================================================
-    
-    def _get_risk_indicators(self) -> str:
-        """Zwraca wizualne wskaźniki ryzyka"""
-        if not self.game_state:
-            return ""
-        return _get_risk_indicators_shared(self.game_state, self.config)
-    
-    # ========================================================================
-    # P0: PRIORYTET TERAZ - CO JEST NAJWAŻNIEJSZE
-    # ========================================================================
-    
-    def _get_priority_action(self) -> Tuple[str, str, str]:
-        """Zwraca (akcja, dlaczego, konsekwencja_braku)"""
-        if not self.game_state:
-            return ("", "", "")
-        return _get_priority_action_shared(self.game_state, self.config)
-    
-    def _show_priority_box(self):
-        """Pokazuje najważniejszą akcję do wykonania"""
-        action, why, consequence = self._get_priority_action()
-        
-        if not action:
-            return
-        
-        print(colored("\n╔══════════════════════════════════════════════════════╗", Colors.YELLOW))
-        print(colored("║  🎯 PRIORYTET TERAZ", Colors.BOLD))
-        print(colored("╠══════════════════════════════════════════════════════╣", Colors.YELLOW))
-        print(f"║  {colored(action, Colors.GREEN)}")
-        print(f"║  ")
-        print(f"║  📖 DLACZEGO: {why}")
-        if consequence:
-            print(f"║  ⚠️  RYZYKO: {colored(consequence, Colors.RED)}")
-        print(colored("╚══════════════════════════════════════════════════════╝", Colors.YELLOW))
-    
-    # ========================================================================
-    # P0: OSTRZEŻENIA PRZED PROBLEMAMI
-    # ========================================================================
-    
-    def _check_warnings_before_month(self) -> List[Dict]:
-        """Sprawdza i zwraca ostrzeżenia przed przejściem do następnego miesiąca"""
-        if not self.game_state:
-            return []
-        
-        warnings = []
-        c = self.game_state.company
-        month = self.game_state.current_month
-        
-        self._recalculate_company_burn()
-
-        effective_mrr = c.mrr
-        if getattr(self.game_state, "revenue_advance_months", 0) > 0:
-            effective_mrr = max(0.0, c.mrr - getattr(self.game_state, "revenue_advance_mrr", 0.0))
-
-        # Przewidywany runway po następnym miesiącu
-        net_burn = c.monthly_burn_rate - effective_mrr
-        projected_cash = c.cash_on_hand - net_burn
-        
-        if projected_cash < 0:
-            warnings.append({
-                "level": "CRITICAL",
-                "title": "BANKRUCTWO ZA 1 MIESIĄC",
-                "message": f"Po tym miesiącu: {projected_cash:,.0f} PLN",
-                "action": "Natychmiast szukaj finansowania lub obetnij koszty"
-            })
-        elif c.runway_months() <= 3:
-            warnings.append({
-                "level": "HIGH",
-                "title": "NISKI RUNWAY",
-                "message": f"Pozostało tylko {_pluralize_months(c.runway_months())}",
-                "action": "Zacznij szukać inwestora lub klientów"
-            })
-        
-        # Konflikt partnerski
-        if self._has_partner() and not self.game_state.agreement_signed:
-            if month >= 3:
-                warnings.append({
-                    "level": "HIGH",
-                    "title": "RYZYKO KONFLIKTU",
-                    "message": f"{month}+ miesiące bez SHA = rosnące ryzyko sporów",
-                    "action": "Podpisz umowę wspólników ASAP"
-                })
-        
-        # PMF
-        if month >= 6 and c.paying_customers < 5:
-            warnings.append({
-                "level": "MEDIUM",
-                "title": "BRAK PRODUCT-MARKET FIT",
-                "message": f"Po {month} mies. masz tylko {c.paying_customers} klientów",
-                "action": "Rozważ pivot lub intensywną sprzedaż"
-            })
-        
-        # MVP nieukończone
-        if not c.mvp_completed and month >= 4:
-            warnings.append({
-                "level": "MEDIUM",
-                "title": "MVP OPÓŹNIONE",
-                "message": f"Po {month} miesiącach MVP wciąż w {self.game_state.mvp_progress}%",
-                "action": "Skup się na ukończeniu MVP"
-            })
-        
-        return warnings
-    
-    def _show_warnings(self, warnings: List[Dict]) -> bool:
-        """Wyświetla ostrzeżenia przed miesiącem. Zwraca False jeśli użytkownik anuluje."""
-        if not warnings:
-            return True
-        
-        print(colored("\n⚠️════════ OSTRZEŻENIA ════════⚠️", Colors.RED))
-        
-        for w in warnings:
-            if w["level"] == "CRITICAL":
-                color = Colors.RED
-                icon = "🔴"
-            elif w["level"] == "HIGH":
-                color = Colors.YELLOW
-                icon = "🟡"
-            else:
-                color = Colors.CYAN
-                icon = "🟠"
-            
-            print(colored(f"\n{icon} {w['title']}", color + Colors.BOLD))
-            print(f"   {w['message']}")
-            print(colored(f"   → Zalecenie: {w['action']}", Colors.CYAN))
-        
-        print(colored("\n════════════════════════════════", Colors.RED))
-        
-        if any(w["level"] == "CRITICAL" for w in warnings):
-            if not self._ask_yes_no("Czy na pewno chcesz kontynuować?", False):
-                return False
-        return True
-    
-    # ========================================================================
-    # P1: SZCZEGÓŁOWY FEEDBACK PO AKCJI
-    # ========================================================================
-    
-    def _show_action_result(self, action: GameAction, success: bool, 
-                            before_state: Dict, after_state: Dict, message: str):
-        """Pokazuje szczegółowy raport z konsekwencjami"""
-        
-        result_color = Colors.GREEN if success else Colors.RED
-        print(colored(f"\n┌─── REZULTAT AKCJI {'─'*40}┐", result_color))
-        print(f"│ {'✅' if success else '❌'} {action.name}")
-        print(f"│ {message}")
-        print(colored(f"├{'─'*55}┤", Colors.CYAN))
-        
-        # CO SIĘ ZMIENIŁO
-        print(colored("│ 📊 ZMIANY:", Colors.BOLD))
-        
-        changes = []
-        if before_state.get('cash') != after_state.get('cash'):
-            diff = after_state['cash'] - before_state['cash']
-            color = Colors.GREEN if diff > 0 else Colors.RED
-            after_cash = after_state['cash']
-            changes.append(f"   Gotówka: {before_state['cash']:,.0f} → {colored(f'{after_cash:,.0f}', color)} PLN ({diff:+,.0f})")
-        
-        if before_state.get('mrr') != after_state.get('mrr'):
-            diff = after_state['mrr'] - before_state['mrr']
-            color = Colors.GREEN if diff > 0 else Colors.RED
-            after_mrr = after_state['mrr']
-            changes.append(f"   MRR: {before_state['mrr']:,.0f} → {colored(f'{after_mrr:,.0f}', color)} PLN ({diff:+,.0f})")
-        
-        if before_state.get('customers') != after_state.get('customers'):
-            diff = after_state['customers'] - before_state['customers']
-            color = Colors.GREEN if diff > 0 else Colors.RED
-            changes.append(f"   Klienci: {before_state['customers']} → {colored(str(after_state['customers']), color)} ({diff:+d})")
-        
-        if before_state.get('registered') != after_state.get('registered') and after_state.get('registered'):
-            changes.append(f"   Spółka: ✗ → {colored('✓ ZAREJESTROWANA', Colors.GREEN)}")
-        
-        if before_state.get('agreement_signed') != after_state.get('agreement_signed') and after_state.get('agreement_signed'):
-            changes.append(f"   SHA: ✗ → {colored('✓ PODPISANA', Colors.GREEN)}")
-        
-        if before_state.get('mvp_progress') != after_state.get('mvp_progress'):
-            diff = after_state['mvp_progress'] - before_state['mvp_progress']
-            after_mvp = after_state['mvp_progress']
-            changes.append(f"   MVP: {before_state['mvp_progress']}% → {colored(f'{after_mvp}%', Colors.GREEN)} (+{diff}%)")
-        
-        if before_state.get('burn') != after_state.get('burn'):
-            diff = after_state['burn'] - before_state['burn']
-            color = Colors.RED if diff > 0 else Colors.GREEN
-            after_burn = after_state['burn']
-            changes.append(f"   Burn: {before_state['burn']:,.0f} → {colored(f'{after_burn:,.0f}', color)} PLN/mies")
-        
-        for change in changes:
-            print(f"│ {change}")
-        
-        if not changes:
-            print("│    Brak bezpośrednich zmian")
-        
-        # CO TO OZNACZA - kontekstowe wyjaśnienie
-        print(colored("│", Colors.CYAN))
-        print(colored("│ 💡 CO TO OZNACZA:", Colors.BOLD))
-        
-        if action.id == "register_company":
-            if success:
-                print("│    • Możesz teraz legalnie wystawiać faktury")
-                print("│    • Twój majątek osobisty jest chroniony")
-                print("│    • Możesz rozmawiać z inwestorami")
-                print(colored("│    ⚠️ PAMIĘTAJ: Od teraz masz obowiązki księgowe!", Colors.YELLOW))
-            else:
-                print("│    • Rejestracja nie powiodła się")
-                print(colored("│    💡 PORADA: Zbierz więcej środków i spróbuj ponownie", Colors.YELLOW))
-        elif action.id == "sign_agreement":
-            if success:
-                print("│    • Masz jasne zasady podziału equity")
-                print("│    • Vesting chroni przed odejściem partnera")
-                print("│    • Możesz bezpiecznie szukać inwestora")
-                print(colored("│    ✓ BRAWO: To kluczowa decyzja dla stabilności!", Colors.GREEN))
-            else:
-                print("│    • Negocjacje z partnerem nie powiodły się")
-                print("│    • Pieniądze wydane na prawnika przepadły")
-                print(colored("│    💡 PORADA: Spróbuj ponownie z innym trybem", Colors.YELLOW))
-                print(colored("│    ⚠️ Bez SHA nadal ryzykujesz konflikty!", Colors.RED))
-        elif action.id == "develop_mvp":
-            if after_state.get('mvp_progress', 0) >= 100:
-                print("│    • 🎉 MVP UKOŃCZONE! Możesz szukać klientów")
-                print("│    • Twój produkt jest gotowy do testów rynkowych")
-            else:
-                remaining = 100 - after_state.get('mvp_progress', 0)
-                print(f"│    • Pozostało ~{remaining}% do ukończenia MVP")
-                print(f"│    • Szacunkowo {_pluralize_months(max(1, remaining // 25))} do końca")
-        elif action.id == "find_customers":
-            print(f"│    • Nowy MRR = recurring revenue")
-            print(f"│    • Każdy klient to dowód PMF")
-            if after_state.get('customers', 0) >= 10:
-                print(colored("│    ✓ Masz 10+ klientów - solidna podstawa do rundy!", Colors.GREEN))
-        elif action.id == "hire_employee":
-            new_runway = after_state.get('runway', 0)
-            print(f"│    • Burn wzrósł, runway teraz: {new_runway} mies")
-            print("│    • Nowy pracownik = szybszy rozwój")
-            if new_runway < 6:
-                print(colored("│    ⚠️ UWAGA: Runway poniżej 6 mies!", Colors.RED))
-        
-        # NASTĘPNY KROK
-        print(colored("│", Colors.CYAN))
-        next_action, why, _ = self._get_priority_action()
-        print(colored(f"│ 👉 NASTĘPNY PRIORYTET: {next_action}", Colors.GREEN))
-        
-        print(colored(f"└{'─'*55}┘", Colors.CYAN))
-    
-    def _get_state_snapshot(self) -> Dict:
-        """Zwraca snapshot aktualnego stanu gry"""
-        c = self.game_state.company
-        return {
-            'cash': c.cash_on_hand,
-            'mrr': c.mrr,
-            'customers': c.paying_customers,
-            'registered': c.registered,
-            'agreement_signed': self.game_state.agreement_signed,
-            'mvp_progress': self.game_state.mvp_progress,
-            'mvp_completed': c.mvp_completed,
-            'burn': c.monthly_burn_rate,
-            'runway': c.runway_months()
-        }
-    
-    # ========================================================================
-    # P1: TABELA POSTĘPU VS CEL
-    # ========================================================================
-    
-    def _show_progress_comparison(self):
-        """Pokazuje gdzie jesteś vs gdzie chcesz być"""
-        if not self.game_state or not self.config:
-            return
-        
-        c = self.game_state.company
-        month = self.game_state.current_month
-        
-        target_mrr = self.config.target_mrr_12_months
-        target_customers = self.config.target_customers_12_months
-        
-        # Oblicz oczekiwany postęp (liniowy)
-        expected_mrr = (target_mrr / 12) * month
-        expected_customers = (target_customers / 12) * month
-        
-        print("\n### 📊 Postęp vs Cel (12 mies.)\n")
-        print("| Metryka | Teraz | Oczekiwane | Cel | Status |")
-        print("|---------|------:|----------:|----:|:------:|")
-        
-        # MRR
-        mrr_status = "🟢" if c.mrr >= expected_mrr else "🟡" if c.mrr >= expected_mrr * 0.5 else "🔴"
-        print(f"| MRR | {c.mrr:,.0f} | {expected_mrr:,.0f} | {target_mrr:,.0f} | {mrr_status} |")
-        
-        # Klienci
-        cust_status = "🟢" if c.paying_customers >= expected_customers else "🟡" if c.paying_customers >= expected_customers * 0.5 else "🔴"
-        print(f"| Klienci | {c.paying_customers} | {expected_customers:.0f} | {target_customers} | {cust_status} |")
-        
-        # Progress bar wizualny
-        mrr_pct = min(100, (c.mrr / target_mrr) * 100) if target_mrr > 0 else 0
-        cust_pct = min(100, (c.paying_customers / target_customers) * 100) if target_customers > 0 else 0
-        
-        print(f"\n📈 MRR:     [{'█' * int(mrr_pct/5)}{'░' * (20-int(mrr_pct/5))}] {mrr_pct:.0f}%")
-        print(f"👥 Klienci: [{'█' * int(cust_pct/5)}{'░' * (20-int(cust_pct/5))}] {cust_pct:.0f}%")
-        
-        # Prognoza
-        if month > 0 and c.mrr > 0:
-            monthly_mrr_growth = c.mrr / month
-            projected_mrr_12 = monthly_mrr_growth * 12
-            print(f"\n📊 Prognoza MRR w mies. 12: {projected_mrr_12:,.0f} PLN ", end="")
-            if projected_mrr_12 >= target_mrr:
-                print(colored("(cel osiągalny!)", Colors.GREEN))
-            else:
-                print(colored(f"(brakuje {target_mrr - projected_mrr_12:,.0f} PLN)", Colors.YELLOW))
-    
-    # ========================================================================
-    # P2: TRYB MENTOR - PODPOWIEDZI EDUKACYJNE
-    # ========================================================================
-    
-    def _mentor_tip(self, topic: str):
-        """Pokazuje edukacyjną podpowiedź dla danego tematu"""
-        if not getattr(self, 'mentor_mode', True):
-            return
-        
-        tips = {
-            "runway": """
-💡 MENTOR: RUNWAY
-Runway to ile miesięcy przetrwasz przy obecnym burn rate.
-Formuła: Gotówka / (Burn - MRR)
-ZASADA: Zawsze utrzymuj min. 6 miesięcy runway!
-Jeśli masz mniej - natychmiast szukaj finansowania lub klientów.""",
-            
-            "sha": """
-💡 MENTOR: SHA (Umowa Wspólników)
-To dokument OBOWIĄZKOWY gdy masz partnera.
-Określa: podział equity, vesting, good/bad leaver, decyzje.
-ZASADA: Podpisz PRZED wspólną pracą!
-Koszt: 3-8k PLN u prawnika, ale oszczędza miliony w sporach.""",
-            
-            "vesting": """
-💡 MENTOR: VESTING
-Stopniowe nabywanie udziałów w czasie (zwykle 48 mies).
-CLIFF: Pierwsze 12 mies. bez equity, potem 25% od razu.
-ZASADA: Chroni przed partnerem który odejdzie po 2 mies z equity.""",
-            
-            "pmf": """
-💡 MENTOR: PRODUCT-MARKET FIT (PMF)
-Moment gdy klienci CHCĄ Twojego produktu.
-Wskaźniki: >40% "bardzo rozczarowanych" przy utracie, organiczny wzrost.
-ZASADA: Bez PMF nie skaluj - najpierw znajdź dopasowanie.""",
-            
-            "burn": """
-💡 MENTOR: BURN RATE
-Ile pieniędzy wydajesz miesięcznie.
-Net burn = Koszty - Przychody (MRR).
-ZASADA: Trzymaj burn niski dopóki nie masz PMF.
-Lepiej wolniej rosnąć niż szybko upaść.""",
-            
-            "mrr": """
-💡 MENTOR: MRR (Monthly Recurring Revenue)
-Powtarzalny przychód miesięczny - kluczowa metryka SaaS.
-Inwestorzy patrzą na: wzrost MoM, churn, LTV/CAC.
-ZASADA: MRR > Burn = zyskowność operacyjna.""",
-            
-            "dilution": """
-💡 MENTOR: ROZWODNIENIE (Dilution)
-Przy każdej rundzie Twój % equity maleje.
-Przykład: Masz 50%, inwestor bierze 20% → zostajesz z 40%.
-ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
-        }
-        
-        if topic in tips:
-            print(colored(tips[topic], Colors.CYAN))
-    
-    # ========================================================================
-    # P2: RAPORT MIESIĘCZNY
-    # ========================================================================
-    
-    def _show_monthly_report(self):
-        """Raport zarządczy po każdym miesiącu"""
-        if not self.game_state:
-            return
-        
-        c = self.game_state.company
-        month = self.game_state.current_month
-        
-        print(f"\n## 📋 RAPORT MIESIĘCZNY - Miesiąc {month}\n")
-        
-        # KPI
-        print("### Kluczowe wskaźniki\n")
-        print("| KPI | Wartość | Status |")
-        print("|-----|--------:|:------:|")
-        
-        # Runway
-        runway = c.runway_months()
-        runway_status = "🟢" if runway > 6 else "🟡" if runway > 3 else "🔴"
-        print(f"| ⏱️ Runway | {runway} mies | {runway_status} |")
-        
-        # MRR
-        mrr_status = "🟢" if c.mrr > 5000 else "🟡" if c.mrr > 0 else "🔴"
-        print(f"| 📈 MRR | {c.mrr:,.0f} PLN | {mrr_status} |")
-        
-        # Klienci
-        cust_status = "🟢" if c.paying_customers >= 10 else "🟡" if c.paying_customers > 0 else "🔴"
-        print(f"| 👥 Klienci | {c.paying_customers} | {cust_status} |")
-        
-        # Gotówka
-        cash_status = "🟢" if c.cash_on_hand > 50000 else "🟡" if c.cash_on_hand > 10000 else "🔴"
-        print(f"| 💰 Gotówka | {c.cash_on_hand:,.0f} PLN | {cash_status} |")
-        
-        # Health check
-        print("\n### Health Check\n")
-        health_items = [
-            ("💰 Runway", f"{runway} mies", "🟢" if runway > 6 else "🟡" if runway > 3 else "🔴"),
-            ("📝 SHA", "✓" if self.game_state.agreement_signed else "✗", "🟢" if self.game_state.agreement_signed or not self._has_partner() else "🔴"),
-            ("🏢 Spółka", "✓" if c.registered else "✗", "🟢" if c.registered else "🟡"),
-            ("🔧 MVP", "✓" if c.mvp_completed else f"{self.game_state.mvp_progress}%", "🟢" if c.mvp_completed else "🟡"),
-        ]
-        
-        print("| Element | Status | |")
-        print("|---------|:------:|:-:|")
-        for name, value, status in health_items:
-            print(f"| {name} | {value} | {status} |")
-        
-        # P&L
-        profit = c.mrr - c.monthly_burn_rate
-        print(f"\n### Miesięczny P&L")
-        print(f"| Pozycja | Kwota |")
-        print(f"|---------|------:|")
-        print(f"| Przychody (MRR) | {c.mrr:,.0f} PLN |")
-        print(f"| Koszty (burn) | {c.monthly_burn_rate:,.0f} PLN |")
-        color = Colors.GREEN if profit >= 0 else Colors.RED
-        print(f"| **WYNIK** | {colored(f'{profit:+,.0f} PLN', color)} |")
-        
-        # Zalecenia
-        print(colored("\n### Zalecenia na następny miesiąc\n", Colors.HEADER))
-        action, why, _ = self._get_priority_action()
-        print(f"🎯 **PRIORYTET:** {action}")
-        print(f"   *{why}*")
-    
-    # ========================================================================
-    # P2: HISTORIA Z ANALIZĄ
-    # ========================================================================
-    
-    def _analyze_history(self):
-        """Analiza historii decyzji"""
-        if not self.action_history:
-            return
-        
-        print(colored("\n### 📚 ANALIZA DECYZJI\n", Colors.HEADER))
-        
-        # Dobre decyzje
-        good = []
-        bad = []
-        
-        for entry in self.action_history:
-            if entry.get('type') == 'action':
-                effects_str = ' '.join(entry.get('effects', []))
-                if 'SHA podpisana' in effects_str or 'agreement' in entry.get('name', '').lower():
-                    good.append(("Podpisanie SHA", "Ochrona przed konfliktami"))
-                if 'zarejestrowana' in effects_str.lower():
-                    good.append(("Rejestracja spółki", "Ochrona prawna"))
-                if 'MVP' in effects_str and 'UKOŃCZONE' in effects_str:
-                    good.append(("Ukończenie MVP", "Gotowość do sprzedaży"))
-            
-            if entry.get('type') == 'event':
-                if 'Konflikt' in entry.get('name', ''):
-                    if self.game_state and not self.game_state.agreement_signed:
-                        bad.append(("Brak SHA przy konflikcie", "Konflikt można było ograniczyć umową"))
-        
-        if good:
-            print(colored("✅ DOBRE DECYZJE:", Colors.GREEN))
-            for name, why in good:
-                print(f"   • {name} - {why}")
-        
-        if bad:
-            print(colored("\n❌ BŁĘDY DO UNIKNIĘCIA:", Colors.RED))
-            for name, lesson in bad:
-                print(f"   • {name} - {lesson}")
-        
-        # Statystyki
-        print(colored("\n📊 STATYSTYKI:", Colors.CYAN))
-        actions_count = len([e for e in self.action_history if e.get('type') == 'action'])
-        events_count = len([e for e in self.action_history if e.get('type') == 'event'])
-        print(f"   Wykonane akcje: {actions_count}")
-        print(f"   Zdarzenia losowe: {events_count}")
-    
-    def do_pomoc(self, arg):
-        """Wyświetla pomoc"""
-        help_text = [
-            f"{colored('start', Colors.GREEN)}      - Rozpocznij nową grę",
-            f"{colored('wczytaj', Colors.GREEN)}    - Wczytaj zapisaną grę",
-            f"{colored('status', Colors.GREEN)}     - Stan firmy",
-            f"{colored('miesiac', Colors.GREEN)}    - Następny miesiąc + akcje",
-            f"{colored('akcje', Colors.GREEN)}      - Dostępne akcje",
-            f"{colored('historia', Colors.GREEN)}   - Historia decyzji z analizą",
-            f"{colored('postep', Colors.GREEN)}     - Postęp vs cele",
-            f"{colored('raport', Colors.GREEN)}     - Raport miesięczny",
-            "",
-            f"{colored('finanse', Colors.GREEN)}    - Szczegóły finansowe",
-            f"{colored('portfele', Colors.GREEN)}   - Portfele wspólników + biznes",
-            f"{colored('equity', Colors.GREEN)}     - Podział udziałów",
-            f"{colored('ryzyko', Colors.GREEN)}     - Analiza ryzyka",
-            "",
-            f"{colored('nauka', Colors.GREEN)}      - Materiały edukacyjne",
-            f"{colored('slownik', Colors.GREEN)}    - Słownik pojęć",
-            "",
-            f"{colored('zapisz', Colors.GREEN)}     - Zapisz grę",
-            f"{colored('wyjscie', Colors.GREEN)}    - Zakończ"
-        ]
-        print_box("POMOC", help_text)
-    
-    def do_help(self, arg):
-        self.do_pomoc(arg)
-    
-    def do_wyjscie(self, arg):
-        """Wyjście z gry"""
-        if self.game_state and self._ask_yes_no("Zapisać grę?"):
-            self.do_zapisz("")
-        print(colored("\nDo zobaczenia!", Colors.CYAN))
-        return True
-    
-    def do_exit(self, arg):
-        return self.do_wyjscie(arg)
-    
-    def do_quit(self, arg):
-        return self.do_wyjscie(arg)
-    
-    def do_start(self, arg):
-        """Rozpoczyna nową grę"""
-        print(colored("\n" + "═"*60, Colors.CYAN))
-        print(colored("  NOWA GRA - Konfiguracja", Colors.BOLD))
-        print(colored("═"*60 + "\n", Colors.CYAN))
-        
-        self.config = PlayerConfig()
-        
-        # ETAP 1: Gracz
-        print(colored("ETAP 1/8: Twoje dane", Colors.HEADER))
-        self.config.player_name = self._ask("Twoje imię", "Founder")
-        
-        print("\nTwoja rola?")
-        print(f"  {colored('1', Colors.GREEN)}. Technical (programista)")
-        print(f"     → {colored('Konsekwencja:', Colors.YELLOW)} Twój czas = wartość MVP")
-        print(f"  {colored('2', Colors.GREEN)}. Business (sprzedaż)")
-        print(f"     → {colored('Konsekwencja:', Colors.YELLOW)} Potrzebujesz technicznego co-foundera")
-        
-        role_idx = self._ask_choice("", ["Technical", "Business"])
-        self.config.player_role = "technical" if role_idx == 0 else "business"
-        
-        # ETAP 2: MVP
-        print(colored("\n\nETAP 2/8: MVP", Colors.HEADER))
-        has_mvp = self._ask_yes_no("Masz już MVP/prototyp?", False)
-        self.config.player_has_mvp = has_mvp
-        
-        if has_mvp:
-            hours = self._ask_number("Godziny na MVP", 10, 5000, 200)
-            rate = self._ask_number("Stawka PLN/h", 50, 500, 120)
-            external = self._ask_number("Koszty zewnętrzne", 0, 100000, 0)
-            self.config.mvp_hours = int(hours)
-            self.config.mvp_hourly_rate = rate
-            self.config.mvp_external_costs = external
-            self.config.mvp_calculated_value = hours * rate + external
-            print(colored(f"\n✓ Wartość MVP: {self.config.mvp_calculated_value:,.0f} PLN", Colors.GREEN))
-            print(colored("💡 MVP daje przewagę - rekomendacja: 55-70% equity", Colors.YELLOW))
-        else:
-            self.config.mvp_calculated_value = 0
-            print(colored("💡 Bez MVP zaczynasz od zera. Priorytet: zbuduj prototyp.", Colors.YELLOW))
-        
-        # ETAP 3: Partnerzy (wspólnicy)
-        print(colored("\n\nETAP 3/8: Wspólnicy", Colors.HEADER))
-        has_partner = self._ask_yes_no("Masz partnera/co-foundera?", False)
-        self.config.has_partner = has_partner
-        
-        # Lista partnerów do obsługi wielu wspólników
-        self.partners_data = []
-        
-        if has_partner:
-            partner_num = 1
-            adding_partners = True
-            
-            while adding_partners:
-                print(colored(f"\n{'─'*40}", Colors.CYAN))
-                print(colored(f"  👤 WSPÓLNIK #{partner_num}", Colors.HEADER))
-                print(colored("─"*40, Colors.CYAN))
-                
-                partner = {
-                    'name': self._ask(f"Imię wspólnika #{partner_num}", f"Partner{partner_num}"),
-                    'role': 'business' if self.config.player_role == 'technical' else 'technical',
-                    'capital': 0,
-                    'experience_years': 0,
-                    'contacts_count': 0,
-                    'krs_verified': False,
-                    'debts_verified': False
-                }
-                
-                print(colored("\n  🔍 WERYFIKACJA:", Colors.YELLOW))
-                partner['krs_verified'] = self._ask_yes_no("  Sprawdziłeś w KRS?", False)
-                if not partner['krs_verified']:
-                    print(colored("     ⚠️ RYZYKO: Możesz nie wiedzieć o upadłościach!", Colors.RED))
-                
-                partner['debts_verified'] = self._ask_yes_no("  Sprawdziłeś rejestry dłużników?", False)
-                if not partner['debts_verified']:
-                    print(colored("     ⚠️ RYZYKO: Partner może mieć długi!", Colors.RED))
-                
-                partner['capital'] = self._ask_number("  Kapitał wnoszony (PLN)", 0, 1000000, 0)
-                partner['experience_years'] = int(self._ask_number("  Doświadczenie (lata)", 0, 30, 0))
-                
-                has_contacts = self._ask_yes_no("  Ma klientów/kontakty?", False)
-                if has_contacts:
-                    partner['contacts_count'] = int(self._ask_number("  Ile kontaktów/leadów wnosi?", 1, 500, 10))
-                    print(colored(f"     ✓ Wnosi {partner['contacts_count']} potencjalnych kontaktów", Colors.GREEN))
-                
-                self.partners_data.append(partner)
-                
-                # Podsumowanie wspólnika
-                print(colored(f"\n  ✓ Dodano: {partner['name']}", Colors.GREEN))
-                print(f"     Kapitał: {partner['capital']:,.0f} PLN")
-                print(f"     Doświadczenie: {partner['experience_years']} lat")
-                print(f"     Kontakty: {partner['contacts_count']}")
-                
-                partner_num += 1
-                if partner_num <= 4:  # Max 4 wspólników
-                    adding_partners = self._ask_yes_no("\n  Dodać kolejnego wspólnika?", False)
-                else:
-                    print(colored("\n  ℹ️ Maksymalna liczba wspólników: 4", Colors.YELLOW))
-                    adding_partners = False
-            
-            # Zachowaj kompatybilność z pojedynczym partnerem
-            if self.partners_data:
-                first = self.partners_data[0]
-                self.config.partner_name = first['name']
-                self.config.partner_capital = first['capital']
-                self.config.partner_experience_years = first['experience_years']
-                self.config.partner_contacts_count = first['contacts_count']
-                self.config.partner_krs_verified = first['krs_verified']
-                self.config.partner_debts_verified = first['debts_verified']
-                self.config.partner_has_customers = first['contacts_count'] > 0
-            
-            # Equity - kalkulacja i uzasadnienie dla wielu wspólników
-            print(colored("\n" + "─"*60, Colors.CYAN))
-            print(colored("  📊 REKOMENDACJA PODZIAŁU EQUITY", Colors.HEADER))
-            print(colored("─"*60, Colors.CYAN))
-            
-            num_partners = len(self.partners_data)
-            total_founders = num_partners + 1  # +1 dla gracza
-            
-            # Bazowy podział równy
-            esop = 10
-            available = 100 - esop
-            base_share = available / total_founders
-            
-            player_base = base_share
-            partner_shares = {p['name']: base_share for p in self.partners_data}
-            reasons = []
-            
-            print(colored("\n  📖 ZASADA WYJŚCIOWA:", Colors.BOLD))
-            print(f"     {total_founders} founderów → {base_share:.0f}% każdy jako baza")
-            print(f"     (po odjęciu {esop}% ESOP)\n")
-            
-            print(colored("  📈 MODYFIKATORY:", Colors.BOLD))
-            
-            # Bonus za MVP dla gracza
-            if self.config.mvp_calculated_value > 0:
-                mvp_bonus = min(15, self.config.mvp_calculated_value / 5000)
-                player_base += mvp_bonus
-                # Odejmij proporcjonalnie od partnerów
-                per_partner_penalty = mvp_bonus / num_partners
-                for name in partner_shares:
-                    partner_shares[name] -= per_partner_penalty
-                print(f"     • MVP ({self.config.mvp_calculated_value:,.0f} PLN): +{mvp_bonus:.0f}% dla Ciebie")
-                reasons.append(f"Twój MVP wart {self.config.mvp_calculated_value:,.0f} PLN")
-            
-            # Bonusy dla partnerów
-            for p in self.partners_data:
-                name = p['name']
-                
-                if p['capital'] > 0:
-                    cap_bonus = min(10, p['capital'] / 5000)
-                    partner_shares[name] += cap_bonus
-                    player_base -= cap_bonus / num_partners
-                    print(f"     • {name} - kapitał ({p['capital']:,.0f} PLN): +{cap_bonus:.0f}%")
-                    reasons.append(f"{name} wnosi {p['capital']:,.0f} PLN")
-                
-                if p['contacts_count'] > 0:
-                    contacts_bonus = min(8, p['contacts_count'] / 5)
-                    partner_shares[name] += contacts_bonus
-                    player_base -= contacts_bonus / num_partners
-                    print(f"     • {name} - kontakty ({p['contacts_count']}): +{contacts_bonus:.0f}%")
-                    reasons.append(f"{name} ma {p['contacts_count']} kontaktów")
-                
-                if p['experience_years'] > 5:
-                    exp_bonus = min(5, p['experience_years'] / 4)
-                    partner_shares[name] += exp_bonus
-                    player_base -= exp_bonus / num_partners
-                    print(f"     • {name} - doświadczenie ({p['experience_years']} lat): +{exp_bonus:.0f}%")
-            
-            # Wyjaśnienie ESOP
-            print(colored("\n  💡 CO TO JEST ESOP?", Colors.BOLD))
-            print("     Employee Stock Option Pool - pula udziałów dla przyszłych")
-            print("     pracowników. Standard: 10-15%. Motywuje zespół i jest")
-            print("     wymagany przez większość inwestorów VC.")
-            
-            # Podsumowanie
-            print(colored("\n  ══════════════════════════════════════", Colors.CYAN))
-            print(colored("  PROPONOWANY PODZIAŁ:", Colors.BOLD))
-            print(colored("  ══════════════════════════════════════", Colors.CYAN))
-            
-            print(colored(f"\n     👤 Ty ({self.config.player_name}): {player_base:.0f}%", Colors.GREEN))
-            total_partners_equity = 0
-            for p in self.partners_data:
-                share = partner_shares[p['name']]
-                total_partners_equity += share
-                verified = "✓" if p['krs_verified'] and p['debts_verified'] else "⚠️"
-                print(f"     👥 {p['name']}: {share:.0f}% {verified}")
-            print(colored(f"     🎁 ESOP (pracownicy): {esop}%", Colors.YELLOW))
-            print(f"     ─────────────────────────────")
-            total = player_base + total_partners_equity + esop
-            print(f"     Σ  RAZEM: {total:.0f}%")
-            
-            if reasons:
-                print(colored("\n  📋 UZASADNIENIE:", Colors.BOLD))
-                for r in reasons:
-                    print(f"     • {r}")
-            
-            # Zapisz wartości
-            self.config.player_equity = player_base
-            self.config.partner_equity = total_partners_equity
-            self.config.esop_pool = esop
-            
-            # Przypisz equity do partnerów
-            for i, p in enumerate(self.partners_data):
-                p['equity'] = partner_shares[p['name']]
-            
-            print("")
-            if not self._ask_yes_no("Akceptujesz ten podział?", True):
-                print(colored("\n  Wprowadź własny podział:", Colors.YELLOW))
-                self.config.player_equity = self._ask_number("Twój udział %", 1, 95, player_base)
-                remaining = 100 - self.config.player_equity - esop
-                for p in self.partners_data:
-                    suggested = remaining / len(self.partners_data)
-                    p['equity'] = self._ask_number(f"Udział {p['name']} %", 1, 90, suggested)
-                    remaining -= p['equity']
-                self.config.partner_equity = sum(p['equity'] for p in self.partners_data)
-                self.config.esop_pool = 100 - self.config.player_equity - self.config.partner_equity
-                print(colored(f"     ESOP: {self.config.esop_pool:.0f}%", Colors.DIM))
-        else:
-            self.config.player_equity = 90
-            self.config.partner_equity = 0
-            self.config.esop_pool = 10
-            print(colored("💡 Solo founding jest trudniejsze, ale możliwe.", Colors.CYAN))
-        
-        # ETAP 3b: Founders Agreement (tylko jeśli jest partner)
-        self.config.fa_signed = False
-        self.config.fa_trial_months = 0
-        self.config.fa_end_action = "dissolve"
-        
-        if has_partner:
-            print(colored("\n\n" + "─"*60, Colors.CYAN))
-            print(colored("  📋 FOUNDERS AGREEMENT (przed spółką!)", Colors.HEADER))
-            print(colored("─"*60, Colors.CYAN))
-            
-            print(colored("\n💡 EDUKACJA:", Colors.YELLOW))
-            print("   Founders Agreement (FA) to dokument PRZED założeniem spółki.")
-            print("   Określa zasady współpracy w fazie testowej.")
-            print("   Typowo podpisuje się FA na okres próbny (3-6 mies.)")
-            print("   zanim zainwestujecie czas/pieniądze w formalną spółkę.\n")
-            
-            print(f"  {colored('1', Colors.GREEN)}. ✅ TAK - Podpisujemy FA na okres próbny")
-            print("     • Określamy zasady na 3-6 miesięcy")
-            print("     • Chroni obie strony")
-            print("     • Koszt: 0-2000 PLN\n")
-            print(f"  {colored('2', Colors.YELLOW)}. ⚠️ NIE - Zaczynamy bez umowy")
-            print("     • Szybszy start")
-            print("     • RYZYKO: Konflikty bez podstawy prawnej")
-            print("     • 67% konfliktów founderów wynika z braku FA\n")
-            print(f"  {colored('3', Colors.CYAN)}. 📝 PÓŹNIEJ - Podpiszemy jak założymy spółkę")
-            print("     • Częsty wybór, ale ryzykowny")
-            print("     • Każdy miesiąc bez umowy = rosnące ryzyko")
-            
-            fa_choice = self._ask_choice("Czy podpisać FA?", ["Tak", "Nie", "Później"])
-            
-            if fa_choice == 0:  # Tak
-                self.config.fa_signed = True
-                trial = int(self._ask_number("Okres próbny (miesiące)", 3, 12, 6))
-                self.config.fa_trial_months = trial
-                
-                print(colored("\n  Co się stanie po okresie próbnym?", Colors.YELLOW))
-                print(f"    {colored('1', Colors.GREEN)}. Rozchodzimy się bez roszczeń")
-                print(f"    {colored('2', Colors.CYAN)}. Przedłużamy FA")
-                print(f"    {colored('3', Colors.YELLOW)}. Automatyczne założenie spółki")
-                
-                end_choice = self._ask_choice("", ["Rozejście", "Przedłużenie", "Spółka"])
-                self.config.fa_end_action = ["dissolve", "extend", "incorporate"][end_choice]
-                
-                print(colored(f"\n✓ Founders Agreement skonfigurowany!", Colors.GREEN))
-                print(f"   • Okres próbny: {trial} miesięcy")
-                print(f"   • Po okresie: {['rozejście bez roszczeń', 'przedłużenie FA', 'założenie spółki'][end_choice]}")
-                print(f"   • Wstępny podział: {self.config.player_equity:.0f}%/{self.config.partner_equity:.0f}%/{self.config.esop_pool:.0f}% ESOP")
-            elif fa_choice == 1:  # Nie
-                print(colored("\n⚠️ RYZYKO: Brak FA może prowadzić do konfliktów!", Colors.RED))
-                print(colored("   Rozważ podpisanie FA gdy tylko nabierzecie pewności.", Colors.YELLOW))
-            else:  # Później
-                print(colored("\n📝 Pamiętaj o podpisaniu SHA po założeniu spółki!", Colors.YELLOW))
-        
-        # ETAP 4: Forma prawna
-        print(colored("\n\nETAP 4/8: Forma prawna", Colors.HEADER))
-        print(colored("\n  1. PSA - ZALECANA dla startupów", Colors.GREEN))
-        print("     ✓ Kapitał: 1 PLN, praca jako wkład, łatwy transfer")
-        print(colored("\n  2. Sp. z o.o.", Colors.CYAN))
-        print("     ✓ Ugruntowana forma, ✗ kapitał min 5000 PLN")
-        
-        choice = self._ask_choice("Wybierz:", ["PSA", "Sp. z o.o."])
-        self.config.legal_form = "psa" if choice == 0 else "sp_zoo"
-        
-        # ETAP 5: Zasoby
-        print(colored("\n\nETAP 5/8: Zasoby", Colors.HEADER))
-        self.config.initial_cash = self._ask_number("Gotówka na start (PLN)", 0, 500000, 10000)
-        self.config.monthly_burn = self._ask_number("Burn rate (PLN/mies)", 1000, 100000, 5000)
-        
-        runway = self.config.initial_cash / self.config.monthly_burn if self.config.monthly_burn > 0 else 0
-        runway_color = Colors.RED if runway < 6 else Colors.YELLOW if runway < 12 else Colors.GREEN
-        print(colored(f"\n📊 Runway: {runway:.1f} miesięcy", runway_color))
-        
-        # ETAP 6: Model Biznesowy
-        print(colored("\n\nETAP 6/8: Model Biznesowy", Colors.HEADER))
-        print(colored("\n  Model biznesowy wpływa na trudność pozyskania klientów,", Colors.DIM))
-        print(colored("  wartość klienta (LTV) i atrakcyjność dla inwestorów.\n", Colors.DIM))
-        
-        print(f"  {colored('1', Colors.GREEN)}. 📱 SaaS (miesięczna subskrypcja)")
-        print(f"     Przykład: Slack, Notion | Churn: 5%/mies | VC: ❤️❤️❤️")
-        print(f"  {colored('2', Colors.GREEN)}. 📅 Roczna subskrypcja (ARR)")
-        print(f"     Przykład: Adobe CC | Churn niższy | VC: ❤️❤️")
-        print(f"  {colored('3', Colors.GREEN)}. 💳 Jednorazowa licencja")
-        print(f"     Przykład: gry | Brak recurring | VC: ✗")
-        print(f"  {colored('4', Colors.GREEN)}. 🏢 Enterprise/Projekty")
-        print(f"     Przykład: consulting | Długi cykl sprzedaży | VC: ✗")
-        print(f"  {colored('5', Colors.GREEN)}. 🛒 Marketplace")
-        print(f"     Przykład: Allegro | Prowizja 5-30% | VC: ❤️❤️❤️")
-        print(f"  {colored('6', Colors.GREEN)}. 🎯 Freemium")
-        print(f"     Przykład: Spotify | Konwersja 2-5% | VC: ❤️❤️")
-        
-        model_types = ["saas", "annual_sub", "license", "enterprise", "marketplace", "freemium"]
-        model_choice = self._ask_choice("", ["SaaS", "Roczna sub", "Licencja", "Enterprise", "Marketplace", "Freemium"])
-        self.config.business_model_type = model_types[model_choice]
-        
-        model = BUSINESS_MODELS[self.config.business_model_type]
-        print(colored(f"\n✓ Model: {self.config.business_model_type.upper()}", Colors.GREEN))
-        print(f"   LTV przy ARPU 150 PLN: {model.calculate_ltv():,.0f} PLN")
-        print(f"   Atrakcyjność VC: {'❤️' * model.vc_attractiveness}")
-        
-        # ETAP 7: Analiza Rynku
-        print(colored("\n\nETAP 7/8: Analiza Rynku", Colors.HEADER))
-        print(colored("\n  Sytuacja rynkowa wpływa na trudność i szybkość wzrostu.\n", Colors.DIM))
-        
-        print(f"  {colored('1', Colors.GREEN)}. 🌱 Greenfield (brak konkurencji)")
-        print(f"     Tworzymy nową kategorię | Trudność: WYSOKA (edukacja rynku)")
-        print(f"  {colored('2', Colors.GREEN)}. 🏃 Rosnący rynek")
-        print(f"     Łapiemy falę | Trudność: ŚREDNIA | Wzrost: +15%/rok")
-        print(f"  {colored('3', Colors.GREEN)}. 🥊 Dojrzały rynek (silna konkurencja)")
-        print(f"     Odbieramy klientów | Trudność: WYSOKA (switching costs)")
-        print(f"  {colored('4', Colors.GREEN)}. 🔄 Disruption (zmiana technologii)")
-        print(f"     Stara technologia umiera | Trudność: NISKA | Timing risk")
-        print(f"  {colored('5', Colors.GREEN)}. 🏝️ Nisza")
-        print(f"     Wyspecjalizowany rynek | Premium pricing | Ograniczony TAM")
-        
-        market_types = ["greenfield", "growing", "mature", "disruption", "niche"]
-        market_choice = self._ask_choice("", ["Greenfield", "Rosnący", "Dojrzały", "Disruption", "Nisza"])
-        self.config.market_type = market_types[market_choice]
-        
-        market = MARKET_CONFIGS[self.config.market_type]
-        difficulty = "WYSOKA" if market.customer_acquisition_multiplier > 1.5 else "ŚREDNIA" if market.customer_acquisition_multiplier > 0.9 else "NISKA"
-        print(colored(f"\n✓ Rynek: {self.config.market_type.upper()}", Colors.GREEN))
-        print(f"   Trudność akwizycji: {difficulty} (×{market.customer_acquisition_multiplier:.1f})")
-        print(f"   Wzrost rynku: +{market.market_growth_rate*100:.0f}%/rok")
-        
-        # ETAP 8: Cele
-        print(colored("\n\nETAP 8/8: Cele (12 mies)", Colors.HEADER))
-        self.config.target_mrr_12_months = self._ask_number("Docelowy MRR (PLN)", 1000, 500000, 10000)
-        self.config.target_customers_12_months = int(self._ask_number("Docelowi klienci", 1, 10000, 50))
-        
-        # Inicjalizacja
-        self._initialize_game()
-        self._show_initial_summary()
-    
-    def _initialize_game(self):
-        """Inicjalizuje stan gry"""
-        self.game_state = GameState(
-            player_name=self.config.player_name,
-            player_role=self.config.player_role
-        )
-        
-        company = Company(name=f"{self.config.player_name}'s Startup")
-        company.legal_form = LegalForm.PSA if self.config.legal_form == "psa" else LegalForm.SP_ZOO
-        company.cash_on_hand = self.config.initial_cash
-        company.founder_living_cost = 3000.0
-        company.cost_multiplier = 1.0
-        company.extra_monthly_costs = max(0.0, float(self.config.monthly_burn) - company.founder_living_cost)
-        company.monthly_burn_rate = float(self.config.monthly_burn)
-        company.esop_pool_percentage = self.config.esop_pool
-        company.mvp_completed = self.config.player_has_mvp
-        
-        player = Founder(
-            name=self.config.player_name,
-            role=self.config.player_role,
-            equity_percentage=self.config.player_equity,
-            brought_mvp=self.config.player_has_mvp,
-            mvp_value=self.config.mvp_calculated_value,
-            is_player=True,
-            personal_cash=getattr(self.config, 'personal_savings', 20000.0),
-        )
-        company.founders.append(player)
-        
-        if self.config.has_partner:
-            # Obsługa wielu wspólników
-            if hasattr(self, 'partners_data') and self.partners_data:
-                for p in self.partners_data:
-                    partner = Founder(
-                        name=p['name'],
-                        role=p.get('role', 'business' if self.config.player_role == "technical" else "technical"),
-                        equity_percentage=p.get('equity', self.config.partner_equity / len(self.partners_data)),
-                        initial_investment=p['capital'],
-                        personal_invested=p['capital'],
-                        experience_years=p['experience_years'],
-                        contacts_count=p['contacts_count'],
-                        krs_verified=p['krs_verified'],
-                        debtor_registry_verified=p['debts_verified'],
-                        is_player=False
-                    )
-                    company.founders.append(partner)
-            else:
-                # Fallback dla pojedynczego partnera
-                partner = Founder(
-                    name=self.config.partner_name,
-                    role="business" if self.config.player_role == "technical" else "technical",
-                    equity_percentage=self.config.partner_equity,
-                    initial_investment=self.config.partner_capital,
-                    personal_invested=self.config.partner_capital,
-                    experience_years=self.config.partner_experience_years,
-                    contacts_count=self.config.partner_contacts_count if hasattr(self.config, 'partner_contacts_count') else 0,
-                    krs_verified=self.config.partner_krs_verified,
-                    debtor_registry_verified=self.config.partner_debts_verified,
-                    is_player=False
-                )
-                company.founders.append(partner)
-        
-        self.game_state.company = company
-        self.game_state.founders_agreement = FoundersAgreement()
-        self.game_state.mvp_progress = 100 if self.config.player_has_mvp else 0
-        
-        # Inicjalizuj FA (Founders Agreement) jeśli podpisany
-        if getattr(self.config, 'fa_signed', False):
-            self.game_state.founders_agreement.fa_signed = True
-            self.game_state.founders_agreement.fa_signed_month = 0
-            self.game_state.founders_agreement.trial_period_months = getattr(self.config, 'fa_trial_months', 6)
-            self.game_state.founders_agreement.trial_end_action = getattr(self.config, 'fa_end_action', 'dissolve')
-            # Zapisz wstępny podział equity
-            self.game_state.founders_agreement.preliminary_equity_split = {
-                self.config.player_name: self.config.player_equity,
-            }
-            for p in getattr(self, 'partners_data', []):
-                self.game_state.founders_agreement.preliminary_equity_split[p['name']] = p.get('equity', 0)
-        
-        # Inicjalizuj model biznesowy i analizę rynku
-        business_model_type = getattr(self.config, 'business_model_type', 'saas')
-        self.game_state.business_model = BUSINESS_MODELS.get(business_model_type, BUSINESS_MODELS['saas'])
-        
-        market_type = getattr(self.config, 'market_type', 'growing')
-        self.game_state.market_analysis = MARKET_CONFIGS.get(market_type, MARKET_CONFIGS['growing'])
-        
-        self.action_system = ActionSystem(self.game_state, self.config)
-
-        self._recalculate_company_burn()
-        self._recalculate_action_points()
-    
-    def _show_initial_summary(self):
-        """Podsumowanie początkowe"""
-        print(colored("\n" + "═"*60, Colors.GREEN))
-        print(colored("  GRA ROZPOCZĘTA!", Colors.BOLD))
-        print(colored("═"*60, Colors.GREEN))
-        
-        company = self.game_state.company
-        
-        # Priorytety
-        if not company.registered:
-            print(colored("\n   ⚠️ PRIORYTET: Zarejestruj spółkę!", Colors.RED))
-        if self._has_partner() and not self.game_state.agreement_signed:
-            print(colored("   ⚠️ PRIORYTET: Podpisz umowę wspólników!", Colors.RED))
-        
-        # Pokaż menu gry
-        self._show_game_menu()
-    
-    def do_miesiac(self, arg):
-        """Następny miesiąc"""
-        if not self.game_state:
-            print(colored("Najpierw 'start'", Colors.RED))
-            return
-        
-        # NOWE: Sprawdź ostrzeżenia PRZED przejściem do następnego miesiąca
-        warnings = self._check_warnings_before_month()
-        if warnings:
-            if not self._show_warnings(warnings):
-                print(colored("\n↩️ Anulowano. Wykonaj akcje aby poprawić sytuację.", Colors.YELLOW))
-                self._show_game_menu()
-                return
-        
-        self.game_state.current_month += 1
-        self.game_state.cut_costs_this_month = False
-        self.actions_this_month = 0  # zużyte punkty akcji
-        self.actions_taken_this_month = 0
-        self._recalculate_action_points()
-        self._recalculate_company_burn()
-        month = self.game_state.current_month
-        
-        print(colored(f"\n{'═'*60}", Colors.CYAN))
-        print(colored(f"  MIESIĄC {month}", Colors.BOLD))
-        print(colored(f"{'═'*60}\n", Colors.CYAN))
-        
-        # Automatyczne zmiany
-        company = self.game_state.company
-        changes = []
-
-        self._recalculate_company_burn()
-
-        effective_mrr = company.mrr
-        if getattr(self.game_state, "revenue_advance_months", 0) > 0:
-            effective_mrr = max(0.0, company.mrr - getattr(self.game_state, "revenue_advance_mrr", 0.0))
-
-        net_burn = company.monthly_burn_rate - effective_mrr
-        if net_burn > 0:
-            company.cash_on_hand -= net_burn
-            changes.append(f"💸 Burn: -{net_burn:,.0f} PLN")
-        else:
-            company.cash_on_hand -= net_burn
-            changes.append(f"💰 Zysk: +{-net_burn:,.0f} PLN")
-
-        if getattr(self.game_state, "revenue_advance_months", 0) > 0:
-            self.game_state.revenue_advance_months -= 1
-            if self.game_state.revenue_advance_months <= 0:
-                self.game_state.revenue_advance_months = 0
-                self.game_state.revenue_advance_mrr = 0.0
-
-        # Zapisz do historii (miesięczny snapshot zmian)
-        if changes:
-            self.action_history.append({
-                'month': month,
-                'type': 'month',
-                'name': 'Zmiany miesiąca',
-                'effects': changes
-            })
-        
-        if company.paying_customers > 0:
-            growth = random.uniform(0.02, 0.08)
-            new_cust = max(1, int(company.paying_customers * growth))
-            avg_rev = company.mrr / company.paying_customers if company.paying_customers else 200
-            company.total_customers += new_cust
-            company.paying_customers += new_cust
-            company.mrr += new_cust * avg_rev
-            changes.append(f"📈 +{new_cust} klientów, MRR +{new_cust * avg_rev:,.0f}")
-
-        self._recalculate_company_burn()
-        
-        if company.mrr > 0:
-            company.current_valuation = company.mrr * 12 * 5
-        
-        # Vesting
-        vesting = self.game_state.founders_agreement.vesting_schedule
-        for founder in company.founders:
-            founder.months_in_company = month
-            if month >= vesting.cliff_months and not founder.cliff_completed:
-                founder.cliff_completed = True
-                cliff_amt = founder.equity_percentage * (vesting.cliff_percentage / 100)
-                founder.vested_percentage = cliff_amt
-                changes.append(f"🎉 {founder.name}: CLIFF! +{cliff_amt:.1f}% vested")
-            elif founder.cliff_completed:
-                rem_months = vesting.total_months - vesting.cliff_months
-                rem_eq = founder.equity_percentage * (1 - vesting.cliff_percentage/100)
-                monthly = rem_eq / rem_months if rem_months > 0 else 0
-                founder.vested_percentage = min(founder.equity_percentage, founder.vested_percentage + monthly)
-        
-        if changes:
-            print(colored("📊 ZMIANY:", Colors.CYAN))
-            for c in changes:
-                print(f"   {c}")
-        
-        # Sytuacja
-        runway = company.runway_months()
-        cash_color = Colors.GREEN if company.cash_on_hand > 50000 else Colors.YELLOW if company.cash_on_hand > 10000 else Colors.RED
-        
-        print(colored("\n📊 SYTUACJA:", Colors.HEADER))
-        print(f"   Gotówka: {colored(f'{company.cash_on_hand:,.0f} PLN', cash_color)}")
-        print(f"   MRR: {company.mrr:,.0f} PLN | Klienci: {company.paying_customers}")
-        print(f"   Runway: {colored(f'{runway} mies', Colors.GREEN if runway > 6 else Colors.RED)}")
-        
-        # Losowe zdarzenie z konsekwencjami
-        if random.random() < 0.4:
-            event = self._generate_random_event()
-            if event:
-                self._apply_event(event)
-        
-        # Menu akcji
-        self._show_action_menu()
-        
-        # Game over?
-        if company.cash_on_hand < 0:
-            print(colored("\n💀 GAME OVER - BANKRUCTWO", Colors.RED))
-            self._show_lessons()
-            self.game_state = None
-        elif company.mrr >= self.config.target_mrr_12_months and company.total_customers >= self.config.target_customers_12_months:
-            print(colored("\n🎉 SUKCES! Cele osiągnięte!", Colors.GREEN))
-    
-    def _show_action_menu(self):
-        """Menu akcji"""
-        if not self.action_system:
-            return
-        
-        actions = self.action_system.get_available_actions()
-        
-        categories = {
-            'legal': ('⚖️ PRAWNE', []),
-            'financial': ('💰 FINANSOWE', []),
-            'crisis': ('🚨 KRYZYS', []),
-            'team': ('👥 ZESPÓŁ', []),
-            'product': ('🔧 PRODUKT', []),
-            'partner': ('🤝 PARTNER', []),
-            'special': ('⚡ INNE', [])
-        }
-        
-        for a in actions:
-            if a.category in categories:
-                categories[a.category][1].append(a)
-        
-        print(colored("\n" + "─"*60, Colors.CYAN))
-        print(colored("  DOSTĘPNE AKCJE", Colors.BOLD))
-        print(colored("─"*60, Colors.CYAN))
-        
-        action_list = []
-        idx = 1
-        
-        for cat_id, (cat_name, cat_actions) in categories.items():
-            if cat_actions:
-                print(colored(f"\n{cat_name}:", Colors.HEADER))
-                for a in cat_actions:
-                    rec = colored(" [ZALECANE]", Colors.YELLOW) if a.recommended else ""
-                    warn = colored(f" {a.warning}", Colors.RED) if a.warning else ""
-                    if a.available:
-                        print(f"  {colored(str(idx), Colors.GREEN)}. ✓ {a.name}{rec}{warn}")
-                        print(f"     {colored(a.description, Colors.DIM)}")
-                    else:
-                        reason = a.blocked_reason or "Niedostępne"
-                        print(f"  {colored(str(idx), Colors.GREEN)}. {colored('✗', Colors.RED)} {a.name} - {reason}")
-                    action_list.append(a)
-                    idx += 1
-        
-        print(colored("\n" + "─"*60, Colors.CYAN))
-        remaining = max(0, self.max_actions_per_month - self.actions_this_month)
-        print(colored(f"  Pozostało punktów akcji: {remaining}/{self.max_actions_per_month}", Colors.YELLOW))
-        
-        while self.actions_this_month < self.max_actions_per_month and self.actions_taken_this_month < self.max_actions_taken_per_month:
-            choice = self._ask("Akcja (numer) lub 'pomiń'", "pomiń")
-            
-            if choice.lower() in ['pomiń', 'pomin', 'skip', '', 'p']:
-                break
-            
-            try:
-                action_idx = int(choice) - 1
-                if 0 <= action_idx < len(action_list):
-                    selected = action_list[action_idx]
-                    if not selected.available:
-                        reason = selected.blocked_reason or "Niedostępne"
-                        print(colored(f"\n❌ Ta akcja jest zablokowana: {reason}", Colors.RED))
-                        continue
-                    self._execute_action(selected)
-                    remaining = max(0, self.max_actions_per_month - self.actions_this_month)
-                    if remaining > 0:
-                        print(colored(f"\n  Pozostało punktów: {remaining}", Colors.YELLOW))
-            except ValueError:
-                pass
-    
     def _execute_action(self, action: GameAction):
         """Wykonuje akcję z pełnym edukacyjnym feedbackiem"""
         print(colored(f"\n📋 {action.name}", Colors.HEADER))
@@ -2396,6 +1125,21 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         
         remaining_points = max(0, self.max_actions_per_month - self.actions_this_month)
         selected_mode = self._choose_action_mode(action, remaining_points)
+
+        if action.modes and not selected_mode:
+            if getattr(self, "_mode_cancelled", False):
+                return
+            print(colored("\n❌ Brak dostępnych trybów (gotówka/punkty akcji).", Colors.RED))
+            return
+
+        if selected_mode:
+            cost_val = float(selected_mode.cost)
+            cost_txt = f"{cost_val:,.0f} PLN" if cost_val > 0 else "0 PLN"
+            time_txt = str(int(selected_mode.time_cost))
+            succ_txt = f"{float(selected_mode.success_rate)*100:.0f}%"
+            print(colored(f"\n   Wybrany tryb: {selected_mode.name}", Colors.DIM))
+            print(colored(f"   Koszt: {cost_txt} | Czas: {time_txt} | Sukces: {succ_txt}", Colors.DIM))
+
         time_cost = int(selected_mode.time_cost) if selected_mode else 1
 
         if remaining_points < time_cost:
@@ -2444,8 +1188,6 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                     history_effects.append(f"Gotówka {effects['cash']:+,.0f} PLN")
                 if 'mrr' in effects and isinstance(effects['mrr'], (int, float)):
                     history_effects.append(f"MRR {effects['mrr']:+,.0f} PLN")
-                if 'burn' in effects and isinstance(effects['burn'], (int, float)):
-                    history_effects.append(f"Burn {effects['burn']:+,.0f} PLN/mies")
 
             history_effects = [_shorten(e, 30) for e in history_effects]
 
@@ -2458,7 +1200,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             })
             self.actions_this_month += time_cost
             self.actions_taken_this_month += 1
-    
+
     def _show_lessons(self):
         """Wnioski po przegranej z analizą błędów"""
         c = self.game_state.company
@@ -2467,7 +1209,6 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         print(colored("\n💀 GAME OVER - ANALIZA", Colors.RED))
         print(colored("═"*60, Colors.RED))
         
-        # Co poszło nie tak
         print(colored("\n❌ CO POSZŁO NIE TAK:", Colors.RED))
         
         mistakes = []
@@ -2687,7 +1428,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             changes.append(f"Burn {sign}{effects['burn']:,.0f}/mies")
         
         if changes:
-            print(colored(f"   → Efekt: {', '.join(changes)}", Colors.YELLOW))
+            print(colored("   → Efekt: {', '.join(changes)}", Colors.YELLOW))
         
         if 'warning' in event:
             print(colored(f"   💡 {event['warning']}", Colors.CYAN))
@@ -2700,57 +1441,93 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             'effects': changes
         })
     
-    def do_historia(self, arg):
-        """Historia decyzji i zdarzeń z analizą"""
-        if not self.game_state:
-            print(colored("Najpierw 'start'", Colors.RED))
-            return
+    def _show_game_menu(self):
+        """Wyświetla menu podczas gry z widocznymi ryzykami"""
+        self._ctx.reset_to_game()
+        self._sync_prompt()
+        c = self.game_state.company
+        month = self.game_state.current_month
         
-        if not self.action_history:
-            print(colored("Brak historii - zagraj kilka miesięcy.", Colors.YELLOW))
-            return
+        remaining = max(0, self.max_actions_per_month - self.actions_this_month)
+        print(colored(f"\n{'═'*60}", Colors.CYAN))
+        print(colored(f"  Mies. {month} | 💰 {c.cash_on_hand:,.0f} | MRR: {c.mrr:,.0f} | ⏱️ {c.runway_months()} mies | ⚡ {remaining}/{self.max_actions_per_month}", Colors.DIM))
+        print(colored(f"{'═'*60}", Colors.CYAN))
         
-        print(colored("\n" + "═"*60, Colors.CYAN))
-        print(colored("  HISTORIA GRY", Colors.BOLD))
-        print(colored("═"*60, Colors.CYAN))
+        # NOWE: Pasek ryzyka ZAWSZE widoczny
+        risk_bar = self._get_risk_indicators()
+        risk_color = Colors.RED if "🔴" in risk_bar else Colors.YELLOW if "🟡" in risk_bar or "🟠" in risk_bar else Colors.GREEN
+        print(colored(f"  ⚠️  {risk_bar}", risk_color))
+        print(colored(f"{'─'*60}", Colors.CYAN))
         
-        current_month = -1
-        for entry in self.action_history[-20:]:  # Ostatnie 20
-            if entry['month'] != current_month:
-                current_month = entry['month']
-                print(colored(f"\n📅 Miesiąc {current_month}:", Colors.HEADER))
-            
-            if entry['type'] == 'event':
-                print(f"   ⚡ {entry['name']}")
-            else:
-                icon = '✓' if entry.get('success', True) else '✗'
-                print(f"   {icon} {entry['name']}")
-            
-            if entry.get('effects'):
-                print(f"      → {', '.join(entry['effects'])}")
+        # NOWE: Priorytet teraz
+        self._show_priority_box()
         
-        # P2: Dodaj analizę decyzji
-        self._analyze_history()
+        print(colored(f"\n{'─'*60}", Colors.CYAN))
+        print(f"  {colored('1', Colors.GREEN)}. ▶️  Następny miesiąc")
+        print(f"  {colored('2', Colors.GREEN)}. 📊 Status")
+        print(f"  {colored('3', Colors.GREEN)}. ⚡ Akcje")
+        print(f"  {colored('4', Colors.GREEN)}. 💰 Finanse")
+        print(f"  {colored('5', Colors.GREEN)}. 💼 Portfele")
+        print(f"  {colored('6', Colors.GREEN)}. 📈 Equity")
+        print(f"  {colored('7', Colors.GREEN)}. ⚠️  Ryzyko")
+        print(f"  {colored('8', Colors.GREEN)}. 💾 Zapisz")
+        print(f"  {colored('9', Colors.GREEN)}. ❓ Pomoc")
+        print(f"  {colored('0', Colors.GREEN)}. 🚪 Wyjście")
+        print()
     
-    def do_postep(self, arg):
-        """Pokazuje postęp vs cele (12 miesięcy)"""
-        if not self.game_state:
-            print(colored("Najpierw 'start'", Colors.RED))
-            return
-        self._show_progress_comparison()
+    prompt = colored("biznes> ", Colors.GREEN)
     
-    def do_raport(self, arg):
-        """Raport miesięczny - podsumowanie zarządcze"""
-        if not self.game_state:
-            print(colored("Najpierw 'start'", Colors.RED))
-            return
-        self._show_monthly_report()
+    def _handle_game_menu(self, choice: str):
+        """Obsługuje wybór z menu gry"""
+        if choice == '1':
+            self.do_miesiac("")
+        elif choice == '2':
+            self.do_status("")
+        elif choice == '3':
+            self.do_akcje("")
+        elif choice == '4':
+            self.do_finanse("")
+        elif choice == '5':
+            self.do_portfele("")
+        elif choice == '6':
+            self.do_equity("")
+        elif choice == '7':
+            self.do_ryzyko("")
+        elif choice == '8':
+            self.do_zapisz("")
+        elif choice == '9':
+            self.do_pomoc("")
+        elif choice == '0':
+            if self._ask_yes_no("Zapisać grę przed wyjściem?"):
+                self.do_zapisz("")
+            self.game_state = None
+            self._ctx.reset_to_main()
+            self._sync_prompt()
+            self._show_main_menu()
     
-    def do_mentor(self, arg):
-        """Włącz/wyłącz tryb mentor (podpowiedzi edukacyjne)"""
-        self.mentor_mode = not self.mentor_mode
-        status = "WŁĄCZONY" if self.mentor_mode else "WYŁĄCZONY"
-        print(colored(f"💡 Tryb mentor: {status}", Colors.CYAN))
+    def _show_main_menu(self):
+        """Wyświetla główne menu z opcjami numerycznymi"""
+        self._ctx.reset_to_main()
+        self._sync_prompt()
+        saves = self._get_saved_games()
+        
+        print(colored('═'*60, Colors.CYAN))
+        print(colored('  BIZNES - Symulator Startupu v2.0', Colors.BOLD))
+        print(colored('  Edukacyjna gra o zakładaniu firmy w Polsce', Colors.CYAN))
+        print(colored('═'*60, Colors.CYAN))
+        print()
+        
+        print(colored("  MENU:", Colors.BOLD))
+        print(f"  {colored('1', Colors.GREEN)}. Nowa gra")
+        
+        if saves:
+            print(f"  {colored('2', Colors.GREEN)}. Wczytaj grę ({len(saves)} zapisów)")
+        else:
+            print(f"  {colored('2', Colors.GREEN)}. Wczytaj grę (brak zapisów)")
+        
+        print(f"  {colored('3', Colors.GREEN)}. Pomoc")
+        print(f"  {colored('0', Colors.GREEN)}. Wyjście")
+        print()
     
     def do_status(self, arg):
         """Status firmy - pełny przegląd w formacie Markdown"""
@@ -2780,7 +1557,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         print("| **Zainwestowane** | " + " | ".join(f"{f.personal_invested:,.0f} PLN" for f in founders) + " |")
         print("| **MVP wniesione** | " + " | ".join(f"{f.mvp_value:,.0f} PLN" if f.mvp_value > 0 else "-" for f in founders) + " |")
         print("| **Kontakty** | " + " | ".join(str(f.contacts_count) if f.contacts_count > 0 else "-" for f in founders) + " |")
-        print("| **Zweryfikowany** | " + " | ".join("✓" if f.krs_verified and f.debtor_registry_verified else "⚠️" for f in founders) + " |")
+        print("| **Zweryfikowany** | " + " | ".join("✓" if f.krs_verified else "⚠️" for f in founders) + " |")
 
         # === STAN FIRMY (Markdown) ===
         print("\n### Stan firmy\n")
@@ -3133,8 +1910,9 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         self.config.partner_equity = data.get('partner_equity', 40)
         self.config.esop_pool = data.get('esop_pool', 10)
         self.config.legal_form = data.get('legal_form', 'psa')
-        self.config.initial_cash = data.get('cash', 10000)
-        self.config.monthly_burn = data.get('burn', 5000)
+        self.config.month = data.get('month', 0)
+        self.config.cash = data.get('cash', 10000)
+        self.config.burn = data.get('burn', 5000)
         
         # Odtwórz stan gry
         self._initialize_game()
@@ -3212,6 +1990,8 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                 self.config.esop_pool = self.game_state.company.esop_pool_percentage
         
         print(colored(f"\n✓ Wczytano grę: {save['name']}", Colors.GREEN))
+        self._ctx.enter_game()
+        self._sync_prompt()
         self._show_game_menu()
     
     def do_zapisz(self, arg):

@@ -660,7 +660,6 @@ class GameState:
     # Postęp MVP
     mvp_progress: int = 0  # 0-100%
     
-    # Flagi akcji miesięcznych
     cut_costs_this_month: bool = False
     
     # Oczekujące decyzje
