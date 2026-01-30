@@ -22,6 +22,62 @@ from .core.models import (
 )
 
 
+def get_risk_indicators(game_state: GameState, config: Optional[PlayerConfig]) -> str:
+    c = game_state.company
+    risks = []
+
+    runway = c.runway_months()
+    if runway < 3:
+        risks.append("🔴 RUNWAY: KRYTYCZNY!")
+    elif runway < 6:
+        risks.append("🟡 RUNWAY: NISKI")
+
+    if config and config.has_partner and not game_state.agreement_signed:
+        risks.append("🔴 SHA: BRAK UMOWY!")
+
+    if not c.registered and game_state.current_month > 3:
+        risks.append("🟡 SPÓŁKA: NIEZAREJESTROWANA")
+
+    if game_state.current_month > 6 and c.paying_customers < 5:
+        risks.append("🟠 PMF: BRAK TRAKCJI")
+
+    if not c.mvp_completed and game_state.current_month > 4:
+        risks.append("🟡 MVP: NIEUKOŃCZONE")
+
+    return " | ".join(risks) if risks else "✅ Brak krytycznych ryzyk"
+
+
+def set_game_subtitle(app: App, game_state: Optional[GameState], config: Optional[PlayerConfig]) -> None:
+    if not game_state or not config:
+        return
+    risk_bar = get_risk_indicators(game_state, config)
+    app.sub_title = f"Mies. {game_state.current_month} | {risk_bar}"
+
+
+EDUCATIONAL_CONTENT = {
+    "register": {
+        "educational_why": "Rejestracja spółki chroni majątek osobisty i ułatwia sprzedaż/inwestycje.",
+        "statistics": "73% inwestorów odmawia rozmów bez zarejestrowanej spółki.",
+        "common_mistake": "Błąd: \"Zarejestruję jak znajdę inwestora\". Dobrze: rejestracja w mies. 1-2.",
+    },
+    "sha": {
+        "educational_why": "SHA ustala zasady współpracy founderów i zmniejsza ryzyko konfliktów.",
+        "statistics": "67% konfliktów founderów wynika z braku SHA.",
+        "common_mistake": "Błąd: odkładanie SHA. Dobrze: podpis przed wspólną pracą.",
+    },
+    "mvp": {
+        "educational_why": "MVP to najszybsza droga do walidacji i feedbacku od rynku.",
+        "statistics": "42% startupów upada bo buduje produkt którego nikt nie chce.",
+        "common_mistake": "Błąd: perfekcjonizm. Dobrze: wypuść szybko i iteruj.",
+    },
+    "customers": {
+        "educational_why": "Płacący klienci to walidacja (PMF) i MRR.",
+        "statistics": "Startup z 10+ płacącymi klientami ma większą szansę na finansowanie.",
+        "common_mistake": "Błąd: \"najpierw produkt, potem sprzedaż\". Dobrze: sprzedaż od dnia 1.",
+    },
+}
+
+
 # ============================================================================
 # EKRANY GRY
 # ============================================================================
@@ -224,6 +280,119 @@ class EventModal(ModalScreen):
         self.app.pop_screen()
 
 
+class WarningsModal(ModalScreen):
+    """Modal ostrzeżeń przed przejściem do następnego miesiąca"""
+
+    BINDINGS = [
+        Binding("enter", "confirm", "Kontynuuj"),
+        Binding("escape", "cancel", "Anuluj"),
+    ]
+
+    def __init__(self, warnings: List[Dict]):
+        super().__init__()
+        self.warnings = warnings
+
+    def compose(self) -> ComposeResult:
+        items: List[Static] = []
+        for w in self.warnings:
+            if w.get("level") == "CRITICAL":
+                icon = "🔴"
+                color = "red"
+            elif w.get("level") == "HIGH":
+                icon = "🟡"
+                color = "yellow"
+            else:
+                icon = "🟠"
+                color = "cyan"
+
+            title = w.get("title", "")
+            message = w.get("message", "")
+            action = w.get("action", "")
+
+            items.append(Static(f"[bold {color}]{icon} {title}[/bold {color}]"))
+            if message:
+                items.append(Static(message))
+            if action:
+                items.append(Static(f"[cyan]→ {action}[/cyan]"))
+            items.append(Static(""))
+
+        yield Container(
+            Static("⚠️ OSTRZEŻENIA", classes="modal-title"),
+            Rule(),
+            *items,
+            Rule(),
+            Horizontal(
+                Button("Kontynuuj", id="confirm", variant="primary"),
+                Button("Anuluj", id="cancel", variant="error"),
+                classes="warnings-actions",
+            ),
+            Static("[Enter] Kontynuuj  |  [Esc] Anuluj", classes="modal-hint"),
+            classes="warnings-modal",
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "confirm":
+            self.dismiss(True)
+        else:
+            self.dismiss(False)
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+class ActionResultModal(ModalScreen):
+    """Modal z wynikiem i interpretacją wykonanej akcji"""
+
+    BINDINGS = [
+        Binding("enter", "dismiss", "OK"),
+        Binding("escape", "dismiss", "OK"),
+    ]
+
+    def __init__(
+        self,
+        title: str,
+        message: str,
+        changes: List[str],
+        meaning: List[str],
+        next_priority: str,
+    ):
+        super().__init__()
+        self.title = title
+        self.message = message
+        self.changes = changes
+        self.meaning = meaning
+        self.next_priority = next_priority
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Static("✅ REZULTAT AKCJI", classes="modal-title"),
+            Rule(),
+            Static(f"[bold]{self.title}[/bold]"),
+            Static(self.message or ""),
+            Rule(),
+            Static("[bold]📊 ZMIANY[/bold]"),
+            *[Static(line) for line in (self.changes or ["Brak bezpośrednich zmian"])],
+            Static(""),
+            Static("[bold]💡 CO TO OZNACZA[/bold]"),
+            *[Static(line) for line in (self.meaning or [])],
+            Static(""),
+            Static(f"[bold green]👉 NASTĘPNY PRIORYTET:[/bold green] {self.next_priority}"),
+            Rule(),
+            Button("OK", id="ok", variant="primary"),
+            Static("[Enter] OK", classes="modal-hint"),
+            classes="action-result-modal",
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(True)
+
+    def action_dismiss(self) -> None:
+        self.dismiss(True)
+
+
 class RiskModal(ModalScreen):
     """Modal dla analizy ryzyka"""
     
@@ -284,7 +453,10 @@ class GameScreen(Screen):
     
     BINDINGS = [
         Binding("m", "next_month", "Następny miesiąc"),
+        Binding("t", "progress", "Postęp"),
         Binding("r", "show_risk", "Ryzyko"),
+        Binding("k", "mentor", "Mentor"),
+        Binding("o", "report", "Raport"),
         Binding("g", "glossary", "Słownik"),
         Binding("f", "finanse", "Finanse"),
         Binding("p", "portfele", "Portfele"),
@@ -300,6 +472,7 @@ class GameScreen(Screen):
         self.actions_this_month = 0
         self.max_actions = 2
         self.current_actions: List[Dict] = []
+        self._actions_render_counter: int = 0
     
     def compose(self) -> ComposeResult:
         yield Header()
@@ -348,6 +521,7 @@ class GameScreen(Screen):
         
         info = tree.root.add("📋 Informacje")
         info.add_leaf("💰 Finanse", data="finanse")
+        info.add_leaf("🎯 Postęp vs cele", data="progress")
         info.add_leaf("💼 Portfele", data="portfele")
         info.add_leaf("📊 Equity", data="equity")
         info.add_leaf("📜 Historia", data="historia")
@@ -355,6 +529,8 @@ class GameScreen(Screen):
         
         tools = tree.root.add("🛠️ Narzędzia")
         tools.add_leaf("⚠️ Ryzyko", data="risk")
+        tools.add_leaf("💡 Mentor", data="mentor")
+        tools.add_leaf("📋 Raport miesięczny", data="report")
         tools.add_leaf("📚 Słownik", data="glossary")
         tools.add_leaf("❓ Pomoc", data="help")
         tools.expand()
@@ -364,6 +540,8 @@ class GameScreen(Screen):
         data = event.node.data
         if data == "finanse":
             self.action_finanse()
+        elif data == "progress":
+            self.action_progress()
         elif data == "portfele":
             self.action_portfele()
         elif data == "equity":
@@ -372,6 +550,10 @@ class GameScreen(Screen):
             self.action_historia()
         elif data == "risk":
             self.action_show_risk()
+        elif data == "mentor":
+            self.action_mentor()
+        elif data == "report":
+            self.action_report()
         elif data == "glossary":
             self.action_glossary()
         elif data == "help":
@@ -413,6 +595,148 @@ class GameScreen(Screen):
         self.game_state.company = company
         self.game_state.founders_agreement = FoundersAgreement()
         self.game_state.mvp_progress = 100 if config.player_has_mvp else 0
+
+    def _get_risk_indicators(self) -> str:
+        if not self.game_state:
+            return ""
+        return get_risk_indicators(self.game_state, self.app.config)
+
+    def _get_priority_action(self) -> Tuple[str, str, str]:
+        if not self.game_state:
+            return ("", "", "")
+
+        c = self.game_state.company
+        month = self.game_state.current_month
+
+        if c.runway_months() < 3:
+            return (
+                "🚨 SZUKAJ FINANSOWANIA LUB KLIENTÓW",
+                f"Masz mniej niż 3 miesiące runway ({c.runway_months()} mies)",
+                f"Bez działania: BANKRUCTWO w ~{c.runway_months()} mies",
+            )
+
+        if self.app.config and self.app.config.has_partner and not self.game_state.agreement_signed:
+            return (
+                "📝 PODPISZ SHA",
+                "Bez umowy partner może odejść z kodem/klientami",
+                "Bez SHA rośnie ryzyko konfliktu i blokady spółki",
+            )
+
+        if not c.registered and month > 2:
+            return (
+                "🏢 ZAREJESTRUJ SPÓŁKĘ",
+                "Bez spółki nie możesz legalnie pozyskać inwestora",
+                "Bez rejestracji odpowiadasz osobiście",
+            )
+
+        if not c.mvp_completed:
+            return (
+                "🔧 DOKOŃCZ MVP",
+                "Bez produktu nie zdobędziesz klientów",
+                "Bez MVP spalasz gotówkę bez walidacji",
+            )
+
+        if c.mvp_completed and c.paying_customers < 10:
+            return (
+                "🎯 ZDOBĄDŹ KLIENTÓW",
+                "Klienci = walidacja + MRR",
+                "Bez klientów brak dowodu PMF",
+            )
+
+        if c.runway_months() < 6:
+            return (
+                "💰 WYDŁUŻ RUNWAY",
+                f"Masz tylko {c.runway_months()} miesięcy runway",
+                "Zalecane minimum to 6 miesięcy",
+            )
+
+        return ("📈 ROZWIJAJ BIZNES", "Masz podstawy, teraz skaluj", "")
+
+    def _check_warnings_before_month(self) -> List[Dict]:
+        if not self.game_state:
+            return []
+
+        warnings: List[Dict] = []
+        c = self.game_state.company
+        month = self.game_state.current_month
+
+        net_burn = c.monthly_burn_rate - c.mrr
+        projected_cash = c.cash_on_hand - net_burn
+
+        if projected_cash < 0:
+            warnings.append({
+                "level": "CRITICAL",
+                "title": "BANKRUCTWO ZA 1 MIESIĄC",
+                "message": f"Po tym miesiącu: {projected_cash:,.0f} PLN",
+                "action": "Natychmiast szukaj finansowania lub obetnij koszty",
+            })
+        elif c.runway_months() <= 3:
+            warnings.append({
+                "level": "HIGH",
+                "title": "NISKI RUNWAY",
+                "message": f"Pozostało tylko {c.runway_months()} miesięcy",
+                "action": "Zacznij szukać inwestora lub klientów",
+            })
+
+        if self.app.config and self.app.config.has_partner and not self.game_state.agreement_signed and month >= 3:
+            warnings.append({
+                "level": "HIGH",
+                "title": "RYZYKO KONFLIKTU",
+                "message": f"{month}+ miesiące bez SHA = rosnące ryzyko sporów",
+                "action": "Podpisz SHA ASAP",
+            })
+
+        if month >= 6 and c.paying_customers < 5:
+            warnings.append({
+                "level": "MEDIUM",
+                "title": "BRAK PRODUCT-MARKET FIT",
+                "message": f"Po {month} mies. masz tylko {c.paying_customers} klientów",
+                "action": "Rozważ pivot lub intensywną sprzedaż",
+            })
+
+        if not c.mvp_completed and month >= 4:
+            warnings.append({
+                "level": "MEDIUM",
+                "title": "MVP OPÓŹNIONE",
+                "message": f"Po {month} miesiącach MVP wciąż w {self.game_state.mvp_progress}%",
+                "action": "Skup się na ukończeniu MVP",
+            })
+
+        return warnings
+
+    def _on_month_warnings_result(self, result: bool) -> None:
+        if result:
+            self._advance_month()
+
+    def _advance_month(self) -> None:
+        if not self.game_state:
+            return
+
+        self.game_state.current_month += 1
+        self.actions_this_month = 0
+
+        c = self.game_state.company
+
+        net_burn = c.monthly_burn_rate - c.mrr
+        c.cash_on_hand -= net_burn
+
+        if c.paying_customers > 0:
+            growth = random.uniform(0.02, 0.08)
+            new_cust = max(1, int(c.paying_customers * growth))
+            avg_rev = c.mrr / c.paying_customers if c.paying_customers else 200
+            c.total_customers += new_cust
+            c.paying_customers += new_cust
+            c.mrr += new_cust * avg_rev
+
+        if random.random() < 0.4:
+            self._random_event()
+
+        if c.cash_on_hand < 0:
+            self.app.push_screen(GameOverScreen(success=False))
+        elif c.mrr >= self.app.config.target_mrr_12_months:
+            self.app.push_screen(GameOverScreen(success=True))
+
+        self._update_display()
     
     def _update_display(self) -> None:
         self._update_status()
@@ -425,6 +749,14 @@ class GameScreen(Screen):
         c = self.game_state.company
         month = self.game_state.current_month
         runway = c.runway_months()
+
+        risk_bar = self._get_risk_indicators()
+        risk_style = "red" if "🔴" in risk_bar else "yellow" if ("🟡" in risk_bar or "🟠" in risk_bar) else "green"
+
+        if hasattr(self.app, "sub_title"):
+            set_game_subtitle(self.app, self.game_state, self.app.config)
+
+        prio_action, prio_why, prio_consequence = self._get_priority_action()
         
         status_text = f"""
 [bold]Miesiąc {month}[/bold]
@@ -437,21 +769,31 @@ class GameScreen(Screen):
 🏢 Spółka: {'✓' if c.registered else '✗'}
 📝 SHA: {'✓' if self.game_state.agreement_signed else '✗'}
 🔧 MVP: {'✓' if c.mvp_completed else f'{self.game_state.mvp_progress}%'}
+
+[{risk_style}]⚠️ {risk_bar}[/{risk_style}]
+
+[bold yellow]🎯 PRIORYTET TERAZ[/bold yellow]
+[bold]{prio_action}[/bold]
+[dim]{prio_why}[/dim]
+{f'[red]{prio_consequence}[/red]' if prio_consequence else ''}
 """
         self.query_one("#status-panel", Static).update(status_text)
     
     def _update_actions(self) -> None:
         actions_list = self.query_one("#actions-list", ListView)
         actions_list.clear()
+
+        self._actions_render_counter += 1
+        render_counter = self._actions_render_counter
         
         self.current_actions = self._get_available_actions()
         
         for i, action in enumerate(self.current_actions):
             if action['available']:
                 rec = "⭐ " if action.get('recommended') else ""
-                item = ListItem(Label(f"✓ {rec}{action['name']}"), id=f"action-{i}")
+                item = ListItem(Label(f"✓ {rec}{action['name']}"), id=f"action-{i}-{render_counter}")
             else:
-                item = ListItem(Label(f"✗ {action['name']}"), id=f"action-{i}")
+                item = ListItem(Label(f"✗ {action['name']}"), id=f"action-{i}-{render_counter}")
                 item.disabled = True
             actions_list.append(item)
         
@@ -508,6 +850,18 @@ class GameScreen(Screen):
         
         if action.get('warning'):
             lines.append(f"[bold red]{action['warning']}[/bold red]")
+
+        if getattr(self.app, "mentor_mode", False):
+            edu = EDUCATIONAL_CONTENT.get(action.get("id", ""), {})
+            if edu:
+                lines.append("")
+                lines.append("[bold cyan]💡 MENTOR[/bold cyan]")
+                if edu.get("educational_why"):
+                    lines.append(f"[cyan]{edu['educational_why']}[/cyan]")
+                if edu.get("statistics"):
+                    lines.append(f"[yellow]📊 {edu['statistics']}[/yellow]")
+                if edu.get("common_mistake"):
+                    lines.append(f"[red]⚠️ {edu['common_mistake']}[/red]")
         
         if not action['available']:
             lines.append(f"\n[dim]❌ {action.get('blocked', 'Niedostępne')}[/dim]")
@@ -634,6 +988,9 @@ class GameScreen(Screen):
     
     def _execute_action(self, action: Dict) -> None:
         c = self.game_state.company
+
+        before_state = self._get_state_snapshot()
+        effect_msg = ""
         
         if action['id'] == 'skip':
             self.action_next_month()
@@ -644,7 +1001,8 @@ class GameScreen(Screen):
             if c.cash_on_hand >= cost:
                 c.cash_on_hand -= cost
                 c.registered = True
-                self._log_action(action['name'], f"-{cost} PLN, spółka zarejestrowana")
+                effect_msg = f"-{cost} PLN, spółka zarejestrowana"
+                self._log_action(action['name'], effect_msg)
         
         elif action['id'] == 'sha':
             cost = action.get('cost', 5000)
@@ -652,16 +1010,19 @@ class GameScreen(Screen):
                 c.cash_on_hand -= cost
                 self.game_state.agreement_signed = True
                 self.game_state.founders_agreement.signed = True
-                self._log_action(action['name'], f"-{cost} PLN, SHA podpisana")
+                effect_msg = f"-{cost} PLN, SHA podpisana"
+                self._log_action(action['name'], effect_msg)
         
         elif action['id'] == 'mvp':
             progress = random.randint(20, 35)
             self.game_state.mvp_progress = min(100, self.game_state.mvp_progress + progress)
             if self.game_state.mvp_progress >= 100:
                 c.mvp_completed = True
-                self._log_action(action['name'], "🎉 MVP ukończone!")
+                effect_msg = "🎉 MVP ukończone!"
+                self._log_action(action['name'], effect_msg)
             else:
-                self._log_action(action['name'], f"+{progress}% (teraz: {self.game_state.mvp_progress}%)")
+                effect_msg = f"+{progress}% (teraz: {self.game_state.mvp_progress}%)"
+                self._log_action(action['name'], effect_msg)
         
         elif action['id'] == 'customers':
             new_customers = random.randint(1, 5)
@@ -669,7 +1030,8 @@ class GameScreen(Screen):
             c.total_customers += new_customers
             c.paying_customers += new_customers
             c.mrr += new_customers * avg_mrr
-            self._log_action(action['name'], f"+{new_customers} klientów, MRR +{new_customers * avg_mrr} PLN")
+            effect_msg = f"+{new_customers} klientów, MRR +{new_customers * avg_mrr} PLN"
+            self._log_action(action['name'], effect_msg)
         
         elif action['id'] == 'investor':
             if random.random() < 0.3:
@@ -681,27 +1043,138 @@ class GameScreen(Screen):
                 for f in c.founders:
                     f.equity_percentage *= (1 - dilution/100)
                 c.esop_pool_percentage *= (1 - dilution/100)
-                self._log_action(action['name'], f"🎯 +{amount:,} PLN za {dilution}%")
+                effect_msg = f"🎯 +{amount:,} PLN za {dilution}%"
+                self._log_action(action['name'], effect_msg)
             else:
-                self._log_action(action['name'], "Rozmowy trwają...")
+                effect_msg = "Rozmowy trwają..."
+                self._log_action(action['name'], effect_msg)
         
         elif action['id'] == 'hire':
             c.employees += 1
             c.monthly_burn_rate += 12000
-            self._log_action(action['name'], "+1 pracownik, burn +12k/mies")
+            effect_msg = "+1 pracownik, burn +12k/mies"
+            self._log_action(action['name'], effect_msg)
         
         elif action['id'] == 'pivot':
             self.game_state.mvp_progress = max(30, self.game_state.mvp_progress - 40)
             c.total_customers = c.total_customers // 2
             c.paying_customers = c.paying_customers // 2
             c.mrr = c.mrr // 2
-            self._log_action(action['name'], "Pivot! -40% MVP, -50% klientów")
-        
+            effect_msg = "Pivot! -40% MVP, -50% klientów"
+            self._log_action(action['name'], effect_msg)
+
+        after_state = self._get_state_snapshot()
         self.actions_this_month += 1
+        pending_next_month = self.actions_this_month >= self.max_actions
         self._update_display()
-        
-        if self.actions_this_month >= self.max_actions:
-            self.action_next_month()
+
+        changes = self._format_state_changes(before_state, after_state)
+        meaning = self._explain_action_meaning(action.get('id', ''), before_state, after_state)
+        next_priority = self._get_priority_action()[0]
+
+        def _after_modal(_: bool) -> None:
+            if pending_next_month:
+                self.action_next_month()
+
+        self.app.push_screen(
+            ActionResultModal(action.get('name', ''), effect_msg, changes, meaning, next_priority),
+            _after_modal,
+        )
+
+    def _get_state_snapshot(self) -> Dict:
+        c = self.game_state.company
+        return {
+            "cash": c.cash_on_hand,
+            "mrr": c.mrr,
+            "customers": c.paying_customers,
+            "registered": c.registered,
+            "agreement_signed": self.game_state.agreement_signed,
+            "mvp_progress": self.game_state.mvp_progress,
+            "mvp_completed": c.mvp_completed,
+            "burn": c.monthly_burn_rate,
+            "runway": c.runway_months(),
+        }
+
+    def _format_state_changes(self, before: Dict, after: Dict) -> List[str]:
+        lines: List[str] = []
+
+        def _fmt_money(x: float) -> str:
+            return f"{x:,.0f} PLN"
+
+        if before.get("cash") != after.get("cash"):
+            diff = after["cash"] - before["cash"]
+            color = "green" if diff > 0 else "red"
+            lines.append(f"💰 Gotówka: {before['cash']:,.0f} → [{color}]{after['cash']:,.0f}[/{color}] ({diff:+,.0f})")
+
+        if before.get("mrr") != after.get("mrr"):
+            diff = after["mrr"] - before["mrr"]
+            color = "green" if diff > 0 else "red"
+            lines.append(f"📈 MRR: {before['mrr']:,.0f} → [{color}]{after['mrr']:,.0f}[/{color}] ({diff:+,.0f})")
+
+        if before.get("customers") != after.get("customers"):
+            diff = after["customers"] - before["customers"]
+            color = "green" if diff > 0 else "red"
+            lines.append(f"👥 Klienci: {before['customers']} → [{color}]{after['customers']}[/{color}] ({diff:+d})")
+
+        if before.get("registered") != after.get("registered"):
+            lines.append("🏢 Spółka: [red]✗[/red] → [green]✓[/green]" if after.get("registered") else "🏢 Spółka: [green]✓[/green] → [red]✗[/red]")
+
+        if before.get("agreement_signed") != after.get("agreement_signed"):
+            lines.append("📝 SHA: [red]✗[/red] → [green]✓[/green]" if after.get("agreement_signed") else "📝 SHA: [green]✓[/green] → [red]✗[/red]")
+
+        if before.get("mvp_progress") != after.get("mvp_progress"):
+            diff = after["mvp_progress"] - before["mvp_progress"]
+            lines.append(f"🔧 MVP: {before['mvp_progress']}% → [green]{after['mvp_progress']}%[/green] ({diff:+d}%)")
+
+        if before.get("burn") != after.get("burn"):
+            diff = after["burn"] - before["burn"]
+            color = "red" if diff > 0 else "green"
+            lines.append(f"🔥 Burn: {before['burn']:,.0f} → [{color}]{after['burn']:,.0f}[/{color}] PLN/mies")
+
+        if before.get("runway") != after.get("runway"):
+            diff = after["runway"] - before["runway"]
+            color = "green" if diff > 0 else "red"
+            lines.append(f"⏱️ Runway: {before['runway']} → [{color}]{after['runway']}[/{color}] mies ({diff:+d})")
+
+        return lines
+
+    def _explain_action_meaning(self, action_id: str, before: Dict, after: Dict) -> List[str]:
+        lines: List[str] = []
+
+        if action_id == "register":
+            lines.append("• Możesz teraz legalnie wystawiać faktury i podpisywać umowy")
+            lines.append("• Twój majątek osobisty jest lepiej chroniony")
+            lines.append("• Od teraz pamiętaj o kosztach księgowości")
+        elif action_id == "sha":
+            lines.append("• Macie jasne zasady podziału equity i rozwiązywania sporów")
+            lines.append("• Inwestorzy traktują to jako minimum higieny prawnej")
+        elif action_id == "mvp":
+            if after.get("mvp_progress", 0) >= 100:
+                lines.append("• MVP ukończone: możesz realnie testować sprzedaż")
+                lines.append("• Teraz priorytetem są płacący klienci (PMF)")
+            else:
+                remaining = 100 - after.get("mvp_progress", 0)
+                lines.append(f"• MVP jeszcze niegotowe: brakuje ~{remaining}%")
+                lines.append("• Im szybciej wyjdziesz na rynek, tym szybciej dostaniesz feedback")
+        elif action_id == "customers":
+            lines.append("• Klienci płacący = walidacja + MRR")
+            if after.get("customers", 0) >= 10:
+                lines.append("• Masz 10+ klientów: solidna baza do rozmów z inwestorami")
+        elif action_id == "investor":
+            if after.get("cash", 0) > before.get("cash", 0):
+                lines.append("• Pozyskałeś kapitał, ale Twoje equity się rozwodniło")
+                lines.append("• Teraz kluczowe jest dostarczać wzrost zgodnie z oczekiwaniami")
+            else:
+                lines.append("• Proces fundraisingu trwa miesiącami; przygotuj pipeline i deck")
+        elif action_id == "hire":
+            lines.append("• Zespół rośnie, ale rośnie też burn (sprawdź runway)")
+            if after.get("runway", 0) < 6:
+                lines.append("• Uwaga: runway poniżej 6 mies to ryzyko operacyjne")
+        elif action_id == "pivot":
+            lines.append("• Pivot to koszt (utrata części pracy), ale szansa na lepszy PMF")
+            lines.append("• Upewnij się, że pivot wynika z danych, nie z frustracji")
+
+        return lines
     
     def _log_action(self, name: str, effect: str) -> None:
         self.action_history.append({
@@ -713,36 +1186,13 @@ class GameScreen(Screen):
     def action_next_month(self) -> None:
         if not self.game_state:
             return
-        
-        self.game_state.current_month += 1
-        self.actions_this_month = 0
-        
-        c = self.game_state.company
-        
-        # Burn
-        net_burn = c.monthly_burn_rate - c.mrr
-        c.cash_on_hand -= net_burn
-        
-        # Organic growth
-        if c.paying_customers > 0:
-            growth = random.uniform(0.02, 0.08)
-            new_cust = max(1, int(c.paying_customers * growth))
-            avg_rev = c.mrr / c.paying_customers if c.paying_customers else 200
-            c.total_customers += new_cust
-            c.paying_customers += new_cust
-            c.mrr += new_cust * avg_rev
-        
-        # Random event (40% chance)
-        if random.random() < 0.4:
-            self._random_event()
-        
-        # Game over check
-        if c.cash_on_hand < 0:
-            self.app.push_screen(GameOverScreen(success=False))
-        elif c.mrr >= self.app.config.target_mrr_12_months:
-            self.app.push_screen(GameOverScreen(success=True))
-        
-        self._update_display()
+
+        warnings = self._check_warnings_before_month()
+        if warnings:
+            self.app.push_screen(WarningsModal(warnings), self._on_month_warnings_result)
+            return
+
+        self._advance_month()
     
     def _random_event(self) -> None:
         c = self.game_state.company
@@ -786,12 +1236,22 @@ class GameScreen(Screen):
     
     def action_finanse(self) -> None:
         self.app.push_screen(FinanceScreen(self.game_state))
+
+    def action_progress(self) -> None:
+        self.app.push_screen(ProgressScreen(self.game_state, self.app.config))
+
+    def action_mentor(self) -> None:
+        self.app.mentor_mode = not getattr(self.app, "mentor_mode", True)
+        self._update_display()
+
+    def action_report(self) -> None:
+        self.app.push_screen(MonthlyReportScreen(self.game_state, self.app.config))
     
     def action_equity(self) -> None:
         self.app.push_screen(EquityScreen(self.game_state))
     
     def action_historia(self) -> None:
-        self.app.push_screen(HistoryScreen(self.action_history))
+        self.app.push_screen(HistoryScreen(self.action_history, self.game_state, self.app.config))
     
     def action_show_risk(self) -> None:
         self.app.push_screen(RiskModal(self.game_state, self.app.config))
@@ -840,6 +1300,193 @@ class FinanceScreen(Screen):
         self.app.pop_screen()
 
 
+class MonthlyReportScreen(Screen):
+    """Ekran raportu miesięcznego"""
+
+    BINDINGS = [Binding("escape", "back", "Wróć")]
+
+    def __init__(self, game_state: GameState, config: PlayerConfig):
+        super().__init__()
+        self.game_state = game_state
+        self.config = config
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Container(
+            Static("📋 RAPORT MIESIĘCZNY", classes="screen-title"),
+            Rule(),
+            ScrollableContainer(id="report-content"),
+            Rule(),
+            Button("← Wróć", id="back"),
+            classes="glossary-box",
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        set_game_subtitle(self.app, self.game_state, self.config)
+
+        c = self.game_state.company
+        month = self.game_state.current_month
+        profit = c.mrr - c.monthly_burn_rate
+        runway = c.runway_months()
+        risk_bar = get_risk_indicators(self.game_state, self.config)
+
+        content = self.query_one("#report-content", ScrollableContainer)
+        content.remove_children()
+
+        content.mount(Static(f"[bold]Miesiąc {month}[/bold]"))
+        content.mount(Static(""))
+        content.mount(Static(f"[bold]💰 Gotówka:[/bold] {c.cash_on_hand:,.0f} PLN"))
+        content.mount(Static(f"[bold]📈 MRR:[/bold] {c.mrr:,.0f} PLN"))
+        content.mount(Static(f"[bold]🔥 Burn:[/bold] {c.monthly_burn_rate:,.0f} PLN/mies"))
+        content.mount(Static(f"[bold]👥 Klienci:[/bold] {c.paying_customers}"))
+        content.mount(Static(f"[bold]⏱️ Runway:[/bold] {runway} mies"))
+        content.mount(Static(""))
+
+        color = "green" if profit >= 0 else "red"
+        content.mount(Static(f"[bold]💹 Wynik miesiąca:[/bold] [{color}]{profit:+,.0f} PLN[/{color}]"))
+        content.mount(Static(""))
+        content.mount(Static(f"[bold]⚠️ Ryzyka:[/bold] {risk_bar}"))
+        content.mount(Static(""))
+
+        prio_action, prio_why, prio_consequence = self._get_priority_action_local()
+        content.mount(Static("[bold yellow]🎯 PRIORYTET NA KOLEJNY MIESIĄC[/bold yellow]"))
+        content.mount(Static(f"[bold]{prio_action}[/bold]"))
+        content.mount(Static(f"[dim]{prio_why}[/dim]"))
+        if prio_consequence:
+            content.mount(Static(f"[red]{prio_consequence}[/red]"))
+
+    def _get_priority_action_local(self) -> Tuple[str, str, str]:
+        c = self.game_state.company
+        month = self.game_state.current_month
+
+        if c.runway_months() < 3:
+            return (
+                "🚨 SZUKAJ FINANSOWANIA LUB KLIENTÓW",
+                f"Masz mniej niż 3 miesiące runway ({c.runway_months()} mies)",
+                f"Bez działania: BANKRUCTWO w ~{c.runway_months()} mies",
+            )
+
+        if self.config and self.config.has_partner and not self.game_state.agreement_signed:
+            return (
+                "📝 PODPISZ SHA",
+                "Bez umowy partner może odejść z kodem/klientami",
+                "Bez SHA rośnie ryzyko konfliktu",
+            )
+
+        if not c.registered and month > 2:
+            return (
+                "🏢 ZAREJESTRUJ SPÓŁKĘ",
+                "Bez spółki nie możesz legalnie pozyskać inwestora",
+                "Bez rejestracji odpowiadasz osobiście",
+            )
+
+        if not c.mvp_completed:
+            return (
+                "🔧 DOKOŃCZ MVP",
+                "Bez produktu nie zdobędziesz klientów",
+                "Bez MVP spalasz gotówkę bez walidacji",
+            )
+
+        if c.mvp_completed and c.paying_customers < 10:
+            return (
+                "🎯 ZDOBĄDŹ KLIENTÓW",
+                "Klienci = walidacja + MRR",
+                "Bez klientów brak dowodu PMF",
+            )
+
+        if c.runway_months() < 6:
+            return (
+                "💰 WYDŁUŻ RUNWAY",
+                f"Masz tylko {c.runway_months()} miesięcy runway",
+                "Zalecane minimum to 6 miesięcy",
+            )
+
+        return ("📈 ROZWIJAJ BIZNES", "Masz podstawy, teraz skaluj", "")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.app.pop_screen()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+
+class ProgressScreen(Screen):
+    """Ekran postępu vs cele"""
+
+    BINDINGS = [Binding("escape", "back", "Wróć")]
+
+    def __init__(self, game_state: GameState, config: PlayerConfig):
+        super().__init__()
+        self.game_state = game_state
+        self.config = config
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Container(
+            Static("🎯 POSTĘP VS CELE (12 mies.)", classes="screen-title"),
+            Rule(),
+            Container(id="progress-content", classes="progress-box"),
+            Rule(),
+            Button("← Wróć", id="back"),
+            classes="info-box",
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        set_game_subtitle(self.app, self.game_state, self.config)
+
+        c = self.game_state.company
+        month = min(12, self.game_state.current_month)
+        target_mrr = getattr(self.config, "target_mrr_12_months", 0) or 0
+        target_customers = getattr(self.config, "target_customers_12_months", 0) or 0
+
+        expected_mrr = (target_mrr / 12) * month if target_mrr else 0
+        expected_customers = (target_customers / 12) * month if target_customers else 0
+
+        mrr_status = "🟢" if c.mrr >= expected_mrr else "🟡" if c.mrr >= expected_mrr * 0.5 else "🔴"
+        cust_status = "🟢" if c.paying_customers >= expected_customers else "🟡" if c.paying_customers >= expected_customers * 0.5 else "🔴"
+
+        mrr_pct = min(100.0, (c.mrr / target_mrr) * 100.0) if target_mrr else 0.0
+        cust_pct = min(100.0, (c.paying_customers / target_customers) * 100.0) if target_customers else 0.0
+
+        content = self.query_one("#progress-content", Container)
+        content.remove_children()
+
+        content.mount(Static("[bold]Tabela[/bold]"))
+        content.mount(Static("| Metryka | Teraz | Oczekiwane | Cel | Status |"))
+        content.mount(Static("|---------|------:|----------:|----:|:------:|"))
+        content.mount(Static(f"| MRR | {c.mrr:,.0f} | {expected_mrr:,.0f} | {target_mrr:,.0f} | {mrr_status} |"))
+        content.mount(Static(f"| Klienci | {c.paying_customers} | {expected_customers:.0f} | {target_customers} | {cust_status} |"))
+
+        content.mount(Static(""))
+        content.mount(Static(f"[bold]📈 MRR[/bold] {mrr_pct:.0f}%"))
+        bar_mrr = ProgressBar(total=100)
+        bar_mrr.progress = int(mrr_pct)
+        content.mount(bar_mrr)
+
+        content.mount(Static(""))
+        content.mount(Static(f"[bold]👥 Klienci[/bold] {cust_pct:.0f}%"))
+        bar_cust = ProgressBar(total=100)
+        bar_cust.progress = int(cust_pct)
+        content.mount(bar_cust)
+
+        if month > 0 and c.mrr > 0:
+            projected_mrr_12 = (c.mrr / month) * 12
+            content.mount(Static(""))
+            if projected_mrr_12 >= target_mrr:
+                content.mount(Static(f"[green]📊 Prognoza MRR w mies. 12: {projected_mrr_12:,.0f} PLN (cel osiągalny!)[/green]"))
+            else:
+                missing = target_mrr - projected_mrr_12
+                content.mount(Static(f"[yellow]📊 Prognoza MRR w mies. 12: {projected_mrr_12:,.0f} PLN (brakuje {missing:,.0f} PLN)[/yellow]"))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.app.pop_screen()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+
 class PortfeleScreen(Screen):
     """Ekran portfeli wspólników i biznesu"""
     
@@ -862,6 +1509,7 @@ class PortfeleScreen(Screen):
         yield Footer()
     
     def on_mount(self) -> None:
+        set_game_subtitle(self.app, self.game_state, self.app.config)
         content = self.query_one("#portfele-content")
         c = self.game_state.company
         
@@ -947,6 +1595,7 @@ class EquityScreen(Screen):
         yield Footer()
     
     def on_mount(self) -> None:
+        set_game_subtitle(self.app, self.game_state, self.app.config)
         content = self.query_one("#equity-content")
         for f in self.game_state.company.founders:
             status = "✓ cliff" if f.cliff_completed else f"{f.months_in_company}/12 mies"
@@ -967,9 +1616,11 @@ class HistoryScreen(Screen):
     
     BINDINGS = [Binding("escape", "back", "Wróć")]
     
-    def __init__(self, history: List[Dict]):
+    def __init__(self, history: List[Dict], game_state: GameState, config: PlayerConfig):
         super().__init__()
         self.history = history
+        self.game_state = game_state
+        self.config = config
     
     def compose(self) -> ComposeResult:
         yield Header()
@@ -983,6 +1634,7 @@ class HistoryScreen(Screen):
         yield Footer()
     
     def on_mount(self) -> None:
+        set_game_subtitle(self.app, self.game_state, self.config)
         content = self.query_one("#history-content")
         if not self.history:
             content.mount(Static("Brak historii"))
@@ -993,6 +1645,49 @@ class HistoryScreen(Screen):
                     current_month = entry['month']
                     content.mount(Static(f"\n[bold]Miesiąc {current_month}[/bold]"))
                 content.mount(Static(f"  {entry['name']} → {entry['effect']}"))
+
+        content.mount(Rule())
+        self._mount_history_analysis(content)
+
+    def _mount_history_analysis(self, content: ScrollableContainer) -> None:
+        actions = [e for e in self.history if isinstance(e, dict) and e.get("name") and not str(e.get("name")).startswith("⚡")]
+        events = [e for e in self.history if isinstance(e, dict) and str(e.get("name", "")).startswith("⚡")]
+
+        good: List[Tuple[str, str]] = []
+        bad: List[Tuple[str, str]] = []
+
+        for entry in actions:
+            name = str(entry.get("name", ""))
+            effect = str(entry.get("effect", ""))
+            blob = f"{name} {effect}".lower()
+
+            if "sha" in blob:
+                good.append(("Podpisanie SHA", "Zmniejsza ryzyko konfliktów i blokady decyzyjnej"))
+            if "spółka" in blob and "zarejestrow" in blob:
+                good.append(("Rejestracja spółki", "Ochrona prawna + większa wiarygodność"))
+            if "mvp" in blob and "ukończ" in blob:
+                good.append(("Ukończenie MVP", "Możesz realnie walidować sprzedaż"))
+
+        for entry in events:
+            name = str(entry.get("name", ""))
+            if "konflikt" in name.lower() and self.config.has_partner and not self.game_state.agreement_signed:
+                bad.append(("Konflikt bez SHA", "Wysokie ryzyko sporów founderów – podpisz SHA wcześniej"))
+
+        content.mount(Static("[bold]📚 ANALIZA DECYZJI[/bold]"))
+
+        if good:
+            content.mount(Static("\n[bold green]✅ DOBRE DECYZJE[/bold green]"))
+            for title, why in good[:6]:
+                content.mount(Static(f"  • [green]{title}[/green] — {why}"))
+
+        if bad:
+            content.mount(Static("\n[bold red]❌ BŁĘDY DO UNIKNIĘCIA[/bold red]"))
+            for title, lesson in bad[:6]:
+                content.mount(Static(f"  • [red]{title}[/red] — {lesson}"))
+
+        content.mount(Static("\n[bold]📊 STATYSTYKI[/bold]"))
+        content.mount(Static(f"  • Akcje: {len(actions)}"))
+        content.mount(Static(f"  • Zdarzenia losowe: {len(events)}"))
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.app.pop_screen()
@@ -1065,7 +1760,10 @@ class HelpScreen(Screen):
             Static(""),
             Static("[bold]Skróty w grze:[/bold]"),
             Static("  M - następny miesiąc"),
+            Static("  T - postęp vs cele"),
             Static("  R - analiza ryzyka"),
+            Static("  K - mentor (włącz/wyłącz)"),
+            Static("  O - raport miesięczny"),
             Static("  F - finanse"),
             Static("  E - equity/cap table"),
             Static("  G - słownik pojęć"),
@@ -1158,7 +1856,7 @@ class BiznesApp(App):
     .desc { text-align: center; padding: 1; }
     .screen-title { text-style: bold; color: $primary; }
     .step-title { text-style: bold; color: $secondary; padding-bottom: 1; }
-    .hint { color: $text-muted; font-size: 80%; }
+    .hint { color: $text-muted; }
     .panel-title { text-style: bold; background: $primary; color: $background; padding: 0 1; }
     .status-content { padding: 1; }
     .actions-info { text-align: center; color: $warning; padding: 1; }
@@ -1195,6 +1893,12 @@ class BiznesApp(App):
     .risk-low { color: $success; text-style: bold; }
     .risk-medium { color: $warning; text-style: bold; }
     .risk-high { color: $error; text-style: bold; }
+
+    .warnings-modal { align: center middle; width: 70; height: auto; border: double $warning; padding: 2; background: $surface; }
+    .warnings-actions { align: center middle; height: auto; }
+
+    .action-result-modal { align: center middle; width: 75; height: auto; border: solid $success; padding: 2; background: $surface; }
+    .progress-box { width: 100%; height: auto; }
     
     Button { margin: 1 0; }
     ListView { height: auto; max-height: 12; }
@@ -1206,6 +1910,7 @@ class BiznesApp(App):
     def __init__(self):
         super().__init__()
         self.config: Optional[PlayerConfig] = None
+        self.mentor_mode: bool = True
     
     def on_mount(self) -> None:
         self.push_screen(WelcomeScreen())

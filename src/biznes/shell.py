@@ -52,6 +52,14 @@ def colored(text: str, color: str) -> str:
     return f"{color}{text}{Colors.END}"
 
 
+def _pluralize_months(n: int) -> str:
+    if n == 1:
+        return "1 miesiąc"
+    if 2 <= n <= 4:
+        return f"{n} miesiące"
+    return f"{n} miesięcy"
+
+
 def print_box(title: str, content: List[str], color: str = Colors.CYAN):
     """Drukuje tekst w ramce"""
     max_len = max(len(title), max(len(line) for line in content) if content else 0)
@@ -189,6 +197,66 @@ class ActionSystem:
     def __init__(self, game_state: GameState, config: PlayerConfig):
         self.state = game_state
         self.config = config
+
+    def _invite_partner(self, company: Company) -> Tuple[bool, str, Dict]:
+        has_partner = any((not f.is_player) and (not f.left_company) for f in company.founders)
+        if has_partner:
+            return False, "Masz już wspólnika.", {}
+
+        player = next((f for f in company.founders if f.is_player and (not f.left_company)), None)
+        if not player:
+            return False, "Brak gracza w spółce - nie można dodać wspólnika.", {}
+
+        partner_name = self.config.partner_name or "Partner"
+        partner_role = "business" if player.role == "technical" else "technical"
+        partner_capital = float(
+            getattr(self.config, "partner_capital", 0.0)
+            or getattr(self.config, "partner_brings_capital", 0.0)
+            or 0.0
+        )
+
+        desired_partner_equity = float(getattr(self.config, "partner_equity", 40.0) or 40.0)
+        desired_partner_equity = max(1.0, min(90.0, desired_partner_equity))
+
+        total_existing_equity = sum(f.equity_percentage for f in company.founders) + company.esop_pool_percentage
+        if total_existing_equity <= 0:
+            total_existing_equity = 100.0
+
+        scale = (100.0 - desired_partner_equity) / total_existing_equity
+        for f in company.founders:
+            f.equity_percentage *= scale
+        company.esop_pool_percentage *= scale
+
+        partner = Founder(
+            name=partner_name,
+            role=partner_role,
+            equity_percentage=desired_partner_equity,
+            initial_investment=partner_capital,
+            personal_invested=partner_capital,
+            experience_years=int(getattr(self.config, "partner_experience_years", 0) or 0),
+            contacts_count=int(getattr(self.config, "partner_contacts_count", 0) or 0),
+            krs_verified=bool(getattr(self.config, "partner_krs_verified", False)),
+            debtor_registry_verified=bool(getattr(self.config, "partner_debts_verified", False)),
+            is_player=False,
+        )
+        company.founders.append(partner)
+        if partner_capital:
+            company.cash_on_hand += partner_capital
+
+        self.config.has_partner = True
+        self.config.partner_name = partner.name
+        self.config.partner_equity = partner.equity_percentage
+        self.config.player_equity = player.equity_percentage
+        self.config.esop_pool = company.esop_pool_percentage
+
+        msg = f"Dodano wspólnika: {partner.name} ({desired_partner_equity:.0f}%)"
+        if not self.state.agreement_signed:
+            msg += " Teraz podpisz SHA."
+
+        return True, msg, {
+            'partner_added': True,
+            'cash': partner_capital,
+        }
     
     def get_available_actions(self) -> List[GameAction]:
         """Zwraca listę dostępnych akcji w danym miesiącu"""
@@ -198,31 +266,42 @@ class ActionSystem:
         
         # AKCJE PRAWNE
         if not company.registered:
+            cost = 2000 if company.legal_form == LegalForm.PSA else 2500
             actions.append(GameAction(
                 id="register_company",
                 name="Załóż spółkę",
                 description=f"Zarejestruj {company.legal_form.value.upper()} w KRS",
                 category="legal",
+                available=company.cash_on_hand >= cost,
+                blocked_reason="" if company.cash_on_hand >= cost else f"Potrzebujesz {cost} PLN",
                 consequences=[f"Koszt: ~{2000 if company.legal_form == LegalForm.PSA else 2500} PLN"],
                 benefits=["Ochrona prawna", "Możliwość pozyskania inwestora"],
                 risks=["Koszty księgowości (~500-1500 PLN/mies)"],
-                cost=2000 if company.legal_form == LegalForm.PSA else 2500,
+                cost=cost,
                 recommended=month >= 1
             ))
         
         if not self.state.agreement_signed:
-            has_partner = len([f for f in company.founders if not f.is_player]) > 0
+            has_partner = any((not f.is_player) and (not f.left_company) for f in company.founders)
+            sha_cost = 5000
+            sha_available = has_partner and company.cash_on_hand >= sha_cost
+            if not has_partner:
+                sha_blocked = "Nie masz partnera"
+            elif company.cash_on_hand < sha_cost:
+                sha_blocked = f"Potrzebujesz {sha_cost} PLN"
+            else:
+                sha_blocked = ""
             actions.append(GameAction(
                 id="sign_agreement",
                 name="Podpisz umowę wspólników (SHA)",
                 description="Formalna umowa regulująca prawa founderów",
                 category="legal",
-                available=has_partner,
-                blocked_reason="" if has_partner else "Nie masz partnera",
+                available=sha_available,
+                blocked_reason=sha_blocked,
                 consequences=["Koszt prawnika: 3000-8000 PLN"],
                 benefits=["Jasne zasady vestingu", "Ochrona przed bad leaver"],
                 risks=["Bez umowy: KRYTYCZNE RYZYKO sporów"],
-                cost=5000,
+                cost=sha_cost,
                 recommended=has_partner,
                 warning="⚠️ BEZ UMOWY RYZYKUJESZ WSZYSTKO!" if has_partner and not self.state.agreement_signed else ""
             ))
@@ -298,6 +377,44 @@ class ActionSystem:
                 risks=["Strata trakcji"],
                 warning="⚠️ 6+ mies bez PMF"
             ))
+
+        if company.runway_months() < 2:
+            actions.append(GameAction(
+                id="cut_costs",
+                name="🔻 Obetnij koszty",
+                description="Zmniejsz burn rate o 30-50%",
+                category="crisis",
+                consequences=["Burn -30-50%", "Możliwe zwolnienia"],
+                benefits=["Wydłużony runway"],
+                risks=["Wolniejszy rozwój"],
+                recommended=True,
+                warning="⚠️ TRYB PRZETRWANIA"
+            ))
+
+            actions.append(GameAction(
+                id="emergency_funding",
+                name="💸 Pożyczka ratunkowa",
+                description="Szybka pożyczka na przetrwanie",
+                category="crisis",
+                consequences=["Dług: 10-20k PLN", "Oprocentowanie 15-20%"],
+                benefits=["Natychmiastowa gotówka"],
+                risks=["Obciążenie finansowe"],
+                warning="⚠️ OSTATECZNOŚĆ"
+            ))
+
+            if company.mrr > 0:
+                can_advance = company.mrr >= 1000 and getattr(self.state, "revenue_advance_months", 0) <= 0
+                actions.append(GameAction(
+                    id="revenue_advance",
+                    name="💰 Zaliczka na przychody",
+                    description="Sprzedaj przyszłe przychody za gotówkę teraz",
+                    category="crisis",
+                    available=can_advance,
+                    blocked_reason="" if can_advance else "Masz już aktywną zaliczkę lub MRR < 1000",
+                    consequences=[f"Otrzymasz ~{company.mrr * 3:,.0f} PLN", "Stracisz 3 mies. MRR"],
+                    benefits=["Szybka gotówka bez długu"],
+                    risks=["Mniejszy cashflow przez 3 mies."]
+                ))
         
         # AKCJE PARTNERSKIE
         player = next((f for f in company.founders if f.is_player), None)
@@ -322,11 +439,14 @@ class ActionSystem:
                 blocked_reason="❌ Nie masz vested udziałów (cliff: 12 mies)"
             ))
         
+        has_partner = any((not f.is_player) and (not f.left_company) for f in company.founders)
         actions.append(GameAction(
             id="invite_partner",
             name="Zaproś nowego wspólnika",
             description="Dodaj co-foundera",
             category="partner",
+            available=not has_partner,
+            blocked_reason="Masz już wspólnika" if has_partner else "",
             consequences=["Rozwodnienie udziałów"],
             benefits=["Nowe kompetencje"],
             risks=["Konflikty wizji"],
@@ -359,6 +479,9 @@ class ActionSystem:
         
         elif action_id == "sign_agreement":
             cost = 5000
+            has_partner = any((not f.is_player) and (not f.left_company) for f in company.founders)
+            if not has_partner:
+                return False, "Nie masz partnera - SHA nie ma sensu bez wspólnika.", {}
             if company.cash_on_hand >= cost:
                 company.cash_on_hand -= cost
                 self.state.agreement_signed = True
@@ -400,6 +523,42 @@ class ActionSystem:
             company.cash_on_hand += amount
             company.monthly_burn_rate += 1000
             return True, f"Pożyczka {amount:,} PLN. Rata: 1k PLN/mies", {}
+
+        elif action_id == "invite_partner":
+            return self._invite_partner(company)
+
+        elif action_id == "cut_costs":
+            reduction = random.uniform(0.3, 0.5)
+            old_burn = company.monthly_burn_rate
+            company.monthly_burn_rate = int(company.monthly_burn_rate * (1 - reduction))
+            saved = old_burn - company.monthly_burn_rate
+            return True, f"Burn obcięty o {reduction*100:.0f}%! Oszczędność: {saved:,.0f} PLN/mies", {
+                'burn': -saved
+            }
+
+        elif action_id == "emergency_funding":
+            amount = random.randint(10000, 20000)
+            payment = int(amount * 0.015)
+            company.cash_on_hand += amount
+            company.monthly_burn_rate += payment
+            return True, f"Pożyczka {amount:,.0f} PLN. Rata: ~{payment:,.0f} PLN/mies", {
+                'cash': amount,
+                'burn': payment
+            }
+
+        elif action_id == "revenue_advance":
+            if company.mrr <= 0:
+                return False, "Brak MRR - nie masz przychodów do sprzedania.", {}
+            if company.mrr < 1000:
+                return False, "MRR zbyt niski (<1000 PLN).", {}
+            if getattr(self.state, "revenue_advance_months", 0) > 0:
+                return False, "Masz już aktywną zaliczkę na przychody.", {}
+
+            advance = company.mrr * 3
+            company.cash_on_hand += advance
+            self.state.revenue_advance_months = 3
+            self.state.revenue_advance_mrr = company.mrr
+            return True, f"Zaliczka {advance:,.0f} PLN (3x MRR)", {'cash': advance}
         
         elif action_id == "pivot":
             self.state.mvp_progress = max(30, self.state.mvp_progress - 40)
@@ -443,7 +602,7 @@ class BiznesShell(cmd.Cmd):
         if saves:
             print(f"  {colored('2', Colors.GREEN)}. Wczytaj grę ({len(saves)} zapisów)")
         else:
-            print(f"  {colored('2', Colors.DIM)}. Wczytaj grę (brak zapisów)")
+            print(f"  {colored('2', Colors.GREEN)}. Wczytaj grę (brak zapisów)")
         
         print(f"  {colored('3', Colors.GREEN)}. Pomoc")
         print(f"  {colored('0', Colors.GREEN)}. Wyjście")
@@ -585,6 +744,11 @@ class BiznesShell(cmd.Cmd):
     def _ask_yes_no(self, prompt: str, default: bool = True) -> bool:
         response = self._ask(f"{prompt} (tak/nie)", "tak" if default else "nie")
         return response.lower() in ['tak', 't', 'yes', 'y', '1']
+
+    def _has_partner(self) -> bool:
+        if not self.game_state:
+            return False
+        return any((not f.is_player) and (not f.left_company) for f in self.game_state.company.founders)
     
     # ========================================================================
     # P0: PASEK RYZYKA - ZAWSZE WIDOCZNY
@@ -606,7 +770,7 @@ class BiznesShell(cmd.Cmd):
             risks.append("🟡 RUNWAY: NISKI")
         
         # SHA
-        if self.config and self.config.has_partner and not self.game_state.agreement_signed:
+        if self._has_partner() and not self.game_state.agreement_signed:
             risks.append("🔴 SHA: BRAK UMOWY!")
         
         # Spółka
@@ -646,7 +810,7 @@ class BiznesShell(cmd.Cmd):
             )
         
         # 2. Brak SHA z partnerem
-        if self.config and self.config.has_partner and not self.game_state.agreement_signed:
+        if self._has_partner() and not self.game_state.agreement_signed:
             return (
                 "📝 PODPISZ SHA (umowę wspólników)",
                 "Bez umowy partner może odejść z kodem/klientami",
@@ -681,7 +845,7 @@ class BiznesShell(cmd.Cmd):
         if c.runway_months() < 6:
             return (
                 "💰 WYDŁUŻ RUNWAY",
-                f"Masz tylko {c.runway_months()} miesięcy runway",
+                f"Masz tylko {_pluralize_months(c.runway_months())} runway",
                 "Zalecane minimum to 6 miesięcy"
             )
         
@@ -736,12 +900,12 @@ class BiznesShell(cmd.Cmd):
             warnings.append({
                 "level": "HIGH",
                 "title": "NISKI RUNWAY",
-                "message": f"Pozostało tylko {c.runway_months()} miesięcy",
+                "message": f"Pozostało tylko {_pluralize_months(c.runway_months())}",
                 "action": "Zacznij szukać inwestora lub klientów"
             })
         
         # Konflikt partnerski
-        if self.config and self.config.has_partner and not self.game_state.agreement_signed:
+        if self._has_partner() and not self.game_state.agreement_signed:
             if month >= 3:
                 warnings.append({
                     "level": "HIGH",
@@ -1060,7 +1224,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         print("\n### Health Check\n")
         health_items = [
             ("💰 Runway", f"{runway} mies", "🟢" if runway > 6 else "🟡" if runway > 3 else "🔴"),
-            ("📝 SHA", "✓" if self.game_state.agreement_signed else "✗", "🟢" if self.game_state.agreement_signed or not (self.config and self.config.has_partner) else "🔴"),
+            ("📝 SHA", "✓" if self.game_state.agreement_signed else "✗", "🟢" if self.game_state.agreement_signed or not self._has_partner() else "🔴"),
             ("🏢 Spółka", "✓" if c.registered else "✗", "🟢" if c.registered else "🟡"),
             ("🔧 MVP", "✓" if c.mvp_completed else f"{self.game_state.mvp_progress}%", "🟢" if c.mvp_completed else "🟡"),
         ]
@@ -1498,7 +1662,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         # Priorytety
         if not company.registered:
             print(colored("\n   ⚠️ PRIORYTET: Zarejestruj spółkę!", Colors.RED))
-        if self.config.has_partner and not self.game_state.agreement_signed:
+        if self._has_partner() and not self.game_state.agreement_signed:
             print(colored("   ⚠️ PRIORYTET: Podpisz umowę wspólników!", Colors.RED))
         
         # Pokaż menu gry
@@ -1529,14 +1693,24 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         # Automatyczne zmiany
         company = self.game_state.company
         changes = []
-        
-        net_burn = company.monthly_burn_rate - company.mrr
+
+        effective_mrr = company.mrr
+        if getattr(self.game_state, "revenue_advance_months", 0) > 0:
+            effective_mrr = max(0.0, company.mrr - getattr(self.game_state, "revenue_advance_mrr", 0.0))
+
+        net_burn = company.monthly_burn_rate - effective_mrr
         if net_burn > 0:
             company.cash_on_hand -= net_burn
             changes.append(f"💸 Burn: -{net_burn:,.0f} PLN")
         else:
             company.cash_on_hand -= net_burn
             changes.append(f"💰 Zysk: +{-net_burn:,.0f} PLN")
+
+        if getattr(self.game_state, "revenue_advance_months", 0) > 0:
+            self.game_state.revenue_advance_months -= 1
+            if self.game_state.revenue_advance_months <= 0:
+                self.game_state.revenue_advance_months = 0
+                self.game_state.revenue_advance_mrr = 0.0
 
         # Zapisz do historii (miesięczny snapshot zmian)
         if changes:
@@ -1615,6 +1789,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         categories = {
             'legal': ('⚖️ PRAWNE', []),
             'financial': ('💰 FINANSOWE', []),
+            'crisis': ('🚨 KRYZYS', []),
             'team': ('👥 ZESPÓŁ', []),
             'product': ('🔧 PRODUKT', []),
             'partner': ('🤝 PARTNER', []),
@@ -1636,15 +1811,16 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             if cat_actions:
                 print(colored(f"\n{cat_name}:", Colors.HEADER))
                 for a in cat_actions:
+                    rec = colored(" [ZALECANE]", Colors.YELLOW) if a.recommended else ""
+                    warn = colored(f" {a.warning}", Colors.RED) if a.warning else ""
                     if a.available:
-                        rec = colored(" [ZALECANE]", Colors.YELLOW) if a.recommended else ""
-                        warn = colored(f" {a.warning}", Colors.RED) if a.warning else ""
                         print(f"  {colored(str(idx), Colors.GREEN)}. ✓ {a.name}{rec}{warn}")
                         print(f"     {colored(a.description, Colors.DIM)}")
-                        action_list.append(a)
-                        idx += 1
                     else:
-                        print(f"  {colored('✗', Colors.RED)} {a.name} - {a.blocked_reason}")
+                        reason = a.blocked_reason or "Niedostępne"
+                        print(f"  {colored(str(idx), Colors.GREEN)}. {colored('✗', Colors.RED)} {a.name} - {reason}")
+                    action_list.append(a)
+                    idx += 1
         
         print(colored("\n" + "─"*60, Colors.CYAN))
         remaining = self.max_actions_per_month - self.actions_this_month
@@ -1659,7 +1835,12 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             try:
                 action_idx = int(choice) - 1
                 if 0 <= action_idx < len(action_list):
-                    self._execute_action(action_list[action_idx])
+                    selected = action_list[action_idx]
+                    if not selected.available:
+                        reason = selected.blocked_reason or "Niedostępne"
+                        print(colored(f"\n❌ Ta akcja jest zablokowana: {reason}", Colors.RED))
+                        continue
+                    self._execute_action(selected)
                     remaining = self.max_actions_per_month - self.actions_this_month
                     if remaining > 0:
                         print(colored(f"\n  Pozostało akcji: {remaining}", Colors.YELLOW))
@@ -1712,6 +1893,18 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             
             # P1: Pokaż szczegółowy raport ze zmianami
             self._show_action_result(action, success, before_state, after_state, msg)
+
+            if success and action.id == "invite_partner":
+                # Uaktualnij config, żeby UX (zapisy/raporty) był spójny
+                self.config.has_partner = True
+                partner = next((f for f in self.game_state.company.founders if not f.is_player and not f.left_company), None)
+                if partner:
+                    self.config.partner_name = partner.name
+                    self.config.partner_equity = partner.equity_percentage
+                player = next((f for f in self.game_state.company.founders if f.is_player), None)
+                if player:
+                    self.config.player_equity = player.equity_percentage
+                self.config.esop_pool = self.game_state.company.esop_pool_percentage
             
             # Pokaż portfele przy podpisaniu SHA
             if effects.get('show_portfele') and success:
@@ -1721,7 +1914,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             # Zapisz do historii
             history_effects: List[str] = []
             if msg:
-                history_effects.append(msg)
+                history_effects.append(msg[:27] + "..." if len(msg) > 30 else msg)
             if isinstance(effects, dict):
                 if 'cash' in effects and isinstance(effects['cash'], (int, float)):
                     history_effects.append(f"Gotówka {effects['cash']:+,.0f} PLN")
@@ -1730,10 +1923,12 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                 if 'burn' in effects and isinstance(effects['burn'], (int, float)):
                     history_effects.append(f"Burn {effects['burn']:+,.0f} PLN/mies")
 
+            history_effects = [e[:27] + "..." if len(e) > 30 else e for e in history_effects]
+
             self.action_history.append({
                 'month': self.game_state.current_month,
                 'type': 'action',
-                'name': action.name,
+                'name': action.name[:35],
                 'success': success,
                 'effects': history_effects
             })
@@ -1742,7 +1937,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
     def _show_lessons(self):
         """Wnioski po przegranej"""
         print(colored("\n📚 WNIOSKI:", Colors.CYAN))
-        if self.config.has_partner and not self.game_state.agreement_signed:
+        if self._has_partner() and not self.game_state.agreement_signed:
             print("   • Zawsze podpisuj umowę wspólników!")
         print("   • Pilnuj runway - min 6 miesięcy")
         print("   • Szukaj klientów ASAP")
@@ -1798,7 +1993,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         ]
         
         # Zdarzenia kontekstowe
-        if self.config.has_partner and not self.game_state.agreement_signed and month > 3:
+        if self._has_partner() and not self.game_state.agreement_signed and month > 3:
             events.append({
                 'type': 'negative', 'name': '⚔️ Konflikt z partnerem',
                 'desc': 'Spór o podział obowiązków i equity!',
@@ -2129,7 +2324,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             risks.append(("WYSOKIE", "Runway < 6 mies"))
             score += 25
         
-        if self.config.has_partner and not self.game_state.agreement_signed:
+        if self._has_partner() and not self.game_state.agreement_signed:
             risks.append(("KRYTYCZNE", "Brak umowy wspólników!"))
             score += 30
         
@@ -2258,6 +2453,52 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         self.game_state.company.mvp_completed = data.get('mvp_completed', False)
         self.game_state.agreement_signed = data.get('agreement_signed', False)
         self.game_state.mvp_progress = data.get('mvp_progress', 0)
+
+        self.game_state.revenue_advance_months = int(data.get('revenue_advance_months', 0) or 0)
+        self.game_state.revenue_advance_mrr = float(data.get('revenue_advance_mrr', 0.0) or 0.0)
+
+        # Jeśli zapis zawiera listę founderów, odtwórz ją (backward compatible)
+        founders_data = data.get('founders')
+        if isinstance(founders_data, list) and founders_data:
+            restored: List[Founder] = []
+            for fdata in founders_data:
+                if not isinstance(fdata, dict):
+                    continue
+                restored.append(Founder(
+                    name=fdata.get('name', ''),
+                    role=fdata.get('role', ''),
+                    equity_percentage=float(fdata.get('equity_percentage', 0.0) or 0.0),
+                    vested_percentage=float(fdata.get('vested_percentage', 0.0) or 0.0),
+                    months_in_company=int(fdata.get('months_in_company', 0) or 0),
+                    cliff_completed=bool(fdata.get('cliff_completed', False)),
+                    personal_invested=float(fdata.get('personal_invested', 0.0) or 0.0),
+                    total_received=float(fdata.get('total_received', 0.0) or 0.0),
+                    contacts_count=int(fdata.get('contacts_count', 0) or 0),
+                    experience_years=int(fdata.get('experience_years', 0) or 0),
+                    krs_verified=bool(fdata.get('krs_verified', False)),
+                    debtor_registry_verified=bool(fdata.get('debtor_registry_verified', False)),
+                    brought_mvp=bool(fdata.get('brought_mvp', False)),
+                    mvp_value=float(fdata.get('mvp_value', 0.0) or 0.0),
+                    is_player=bool(fdata.get('is_player', False)),
+                ))
+
+            if restored:
+                if not any(f.is_player for f in restored):
+                    restored[0].is_player = True
+                self.game_state.company.founders = restored
+
+                # Uaktualnij config na podstawie stanu (żeby UX był spójny)
+                self.config.has_partner = any((not f.is_player) for f in restored)
+                player = next((f for f in restored if f.is_player), None)
+                if player:
+                    self.config.player_name = player.name or self.config.player_name
+                    self.config.player_role = player.role or self.config.player_role
+                    self.config.player_equity = player.equity_percentage
+                partner = next((f for f in restored if not f.is_player), None)
+                if partner:
+                    self.config.partner_name = partner.name or self.config.partner_name
+                    self.config.partner_equity = partner.equity_percentage
+                self.config.esop_pool = self.game_state.company.esop_pool_percentage
         
         print(colored(f"\n✓ Wczytano grę: {save['name']}", Colors.GREEN))
         self._show_game_menu()
@@ -2288,6 +2529,28 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             'mvp_completed': self.game_state.company.mvp_completed,
             'agreement_signed': self.game_state.agreement_signed,
             'mvp_progress': self.game_state.mvp_progress,
+            'revenue_advance_months': getattr(self.game_state, 'revenue_advance_months', 0),
+            'revenue_advance_mrr': getattr(self.game_state, 'revenue_advance_mrr', 0.0),
+            'founders': [
+                {
+                    'name': f.name,
+                    'role': f.role,
+                    'equity_percentage': f.equity_percentage,
+                    'vested_percentage': f.vested_percentage,
+                    'months_in_company': f.months_in_company,
+                    'cliff_completed': f.cliff_completed,
+                    'personal_invested': f.personal_invested,
+                    'total_received': f.total_received,
+                    'contacts_count': f.contacts_count,
+                    'experience_years': f.experience_years,
+                    'krs_verified': f.krs_verified,
+                    'debtor_registry_verified': f.debtor_registry_verified,
+                    'brought_mvp': f.brought_mvp,
+                    'mvp_value': f.mvp_value,
+                    'is_player': f.is_player,
+                }
+                for f in self.game_state.company.founders
+            ],
         }
         
         if yaml:

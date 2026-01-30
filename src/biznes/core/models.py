@@ -358,6 +358,9 @@ class GameState:
     # Oczekujące decyzje
     pending_investment: Optional[Dict] = None
     adding_partner: bool = False
+
+    revenue_advance_months: int = 0
+    revenue_advance_mrr: float = 0.0
     
     # Parametry symulacji
     simulation_speed: str = "normal"  # "fast", "normal", "detailed"
