@@ -20,7 +20,8 @@ from dataclasses import dataclass, field
 from .core.models import (
     GameState, PlayerConfig, Company, Founder, 
     LegalForm, EmploymentForm, StartupStage,
-    FoundersAgreement, VestingSchedule
+    FoundersAgreement, VestingSchedule,
+    ActionMode, ActionPointSystem, CostCalculator
 )
 from .scenarios.engine import ScenarioEngine
 from .utils.guidance import (
@@ -109,6 +110,10 @@ class GameAction:
     cost: float = 0.0
     recommended: bool = False
     warning: str = ""
+
+    modes: Dict[str, ActionMode] = field(default_factory=dict)
+    base_effect: Dict[str, Any] = field(default_factory=dict)
+    educational_tip: str = ""
     
     # P1: Edukacyjne opisy
     educational_why: str = ""  # Dlaczego to ważne
@@ -213,6 +218,7 @@ class ActionSystem:
     def __init__(self, game_state: GameState, config: PlayerConfig):
         self.state = game_state
         self.config = config
+        self._cost_calc = CostCalculator()
 
     def _invite_partner(self, company: Company) -> Tuple[bool, str, Dict]:
         has_partner = any((not f.is_player) and (not f.left_company) for f in company.founders)
@@ -313,12 +319,12 @@ class ActionSystem:
         
         if not self.state.agreement_signed:
             has_partner = any((not f.is_player) and (not f.left_company) for f in company.founders)
-            sha_cost = 5000
-            sha_available = has_partner and company.cash_on_hand >= sha_cost
+            sha_min_cost = 500
+            sha_available = has_partner and company.cash_on_hand >= sha_min_cost
             if not has_partner:
                 sha_blocked = "Nie masz partnera"
-            elif company.cash_on_hand < sha_cost:
-                sha_blocked = f"Potrzebujesz {sha_cost} PLN"
+            elif company.cash_on_hand < sha_min_cost:
+                sha_blocked = f"Potrzebujesz {sha_min_cost} PLN"
             else:
                 sha_blocked = ""
             actions.append(GameAction(
@@ -331,9 +337,33 @@ class ActionSystem:
                 consequences=["Koszt prawnika: 3000-8000 PLN"],
                 benefits=["Jasne zasady vestingu", "Ochrona przed bad leaver"],
                 risks=["Bez umowy: KRYTYCZNE RYZYKO sporów"],
-                cost=sha_cost,
                 recommended=has_partner,
-                warning="⚠️ BEZ UMOWY RYZYKUJESZ WSZYSTKO!" if has_partner and not self.state.agreement_signed else ""
+                warning="⚠️ BEZ UMOWY RYZYKUJESZ WSZYSTKO!" if has_partner and not self.state.agreement_signed else "",
+                modes={
+                    "diy": ActionMode(
+                        name="🔧 Zrób sam (template)",
+                        cost=500,
+                        time_cost=2,
+                        success_rate=0.4,
+                        quality_modifier=0.5,
+                        requires_skill="legal",
+                    ),
+                    "lawyer_basic": ActionMode(
+                        name="⚖️ Prawnik (standard)",
+                        cost=5000,
+                        time_cost=1,
+                        success_rate=0.95,
+                        quality_modifier=1.0,
+                    ),
+                    "lawyer_premium": ActionMode(
+                        name="🏢 Kancelaria (premium)",
+                        cost=15000,
+                        time_cost=0,
+                        success_rate=0.99,
+                        quality_modifier=1.2,
+                    ),
+                },
+                base_effect={"agreement_signed": True},
             ))
         
         # AKCJE FINANSOWE
@@ -382,7 +412,32 @@ class ActionSystem:
                 category="product",
                 consequences=["Postęp: +20-30%"],
                 benefits=["Przybliża do klientów"],
-                recommended=True
+                recommended=True,
+                modes={
+                    "diy": ActionMode(
+                        name="🔧 Zrób sam (koduj wieczorami)",
+                        cost=0,
+                        time_cost=2,
+                        success_rate=0.7,
+                        quality_modifier=0.8,
+                        requires_skill="technical",
+                    ),
+                    "contractor": ActionMode(
+                        name="👨‍💻 Freelancer", 
+                        cost=5000,
+                        time_cost=1,
+                        success_rate=0.85,
+                        quality_modifier=1.0,
+                    ),
+                    "agency": ActionMode(
+                        name="🏢 Agencja dev",
+                        cost=15000,
+                        time_cost=0,
+                        success_rate=0.95,
+                        quality_modifier=1.2,
+                    ),
+                },
+                base_effect={"mvp_progress": 25},
             ))
         
         if company.mvp_completed or getattr(self.config, 'player_has_mvp', False):
@@ -494,38 +549,99 @@ class ActionSystem:
         
         return actions
     
-    def execute_action(self, action_id: str) -> Tuple[bool, str, Dict]:
+    def execute_action(self, action_id: str, mode: Optional[ActionMode] = None) -> Tuple[bool, str, Dict]:
         """Wykonuje akcję"""
         company = self.state.company
         effects = {}
+
+        def _adjusted_success_rate(m: ActionMode) -> float:
+            rate = float(m.success_rate)
+            if m.requires_skill and m.requires_skill not in ["legal", "financial"]:
+                if self.state.player_role != m.requires_skill:
+                    rate -= 0.2
+            return max(0.05, min(0.99, rate))
+
+        def _recalc_burn_delta(before: float) -> float:
+            company.monthly_burn_rate = float(self._cost_calc.total_burn(self.state))
+            return company.monthly_burn_rate - before
         
         if action_id == "register_company":
+            before_burn = company.monthly_burn_rate
             cost = 2000 if company.legal_form == LegalForm.PSA else 2500
             if company.cash_on_hand >= cost:
                 company.cash_on_hand -= cost
                 company.registered = True
-                return True, "Spółka zarejestrowana w KRS!", {'cash': -cost}
+                burn_delta = _recalc_burn_delta(before_burn)
+                return True, "Spółka zarejestrowana w KRS!", {'cash': -cost, 'burn': burn_delta}
             return False, f"Brak środków ({cost} PLN)", {}
         
         elif action_id == "sign_agreement":
-            cost = 5000
+            before_burn = company.monthly_burn_rate
             has_partner = any((not f.is_player) and (not f.left_company) for f in company.founders)
             if not has_partner:
                 return False, "Nie masz partnera - SHA nie ma sensu bez wspólnika.", {}
-            if company.cash_on_hand >= cost:
-                company.cash_on_hand -= cost
+
+            selected = mode or ActionMode(name="⚖️ Prawnik (standard)", cost=5000, time_cost=1, success_rate=0.95)
+            if company.cash_on_hand < selected.cost:
+                return False, f"Brak środków ({selected.cost} PLN)", {}
+
+            company.cash_on_hand -= selected.cost
+            roll = random.random()
+            if roll <= _adjusted_success_rate(selected):
                 self.state.agreement_signed = True
                 self.state.founders_agreement.signed = True
-                return True, "Umowa wspólników podpisana!", {'cash': -cost, 'show_portfele': True}
-            return False, f"Brak środków ({cost} PLN)", {}
+                burn_delta = _recalc_burn_delta(before_burn)
+                return True, "Umowa wspólników podpisana!", {
+                    'cash': -selected.cost,
+                    'burn': burn_delta,
+                    'show_portfele': True,
+                }
+
+            burn_delta = _recalc_burn_delta(before_burn)
+            return False, "Nie udało się dopiąć SHA (błędy/negocjacje).", {
+                'cash': -selected.cost,
+                'burn': burn_delta,
+            }
         
         elif action_id == "develop_mvp":
-            progress = random.randint(20, 35)
+            before_burn = company.monthly_burn_rate
+
+            selected = mode or ActionMode(name="🔧 Zrób sam", cost=0, time_cost=1, success_rate=0.7, quality_modifier=1.0)
+            if company.cash_on_hand < selected.cost:
+                return False, f"Brak środków ({selected.cost} PLN)", {}
+
+            if selected.cost:
+                company.cash_on_hand -= selected.cost
+
+            roll = random.random()
+            if roll > _adjusted_success_rate(selected):
+                burn_delta = _recalc_burn_delta(before_burn)
+                return False, "Nie udało się posunąć MVP w tym miesiącu.", {
+                    'cash': -selected.cost,
+                    'burn': burn_delta,
+                }
+
+            base = random.uniform(20, 30)
+            progress = int(round(base * float(selected.quality_modifier)))
+            progress = max(1, min(40, progress))
+
             self.state.mvp_progress = min(100, self.state.mvp_progress + progress)
             if self.state.mvp_progress >= 100:
                 company.mvp_completed = True
-                return True, "🎉 MVP UKOŃCZONE!", {'mvp_progress': progress}
-            return True, f"Postęp MVP: +{progress}% (teraz: {self.state.mvp_progress}%)", {}
+
+            burn_delta = _recalc_burn_delta(before_burn)
+            if company.mvp_completed:
+                return True, "🎉 MVP UKOŃCZONE!", {
+                    'mvp_progress': progress,
+                    'cash': -selected.cost,
+                    'burn': burn_delta,
+                }
+
+            return True, f"Postęp MVP: +{progress}% (teraz: {self.state.mvp_progress}%)", {
+                'mvp_progress': progress,
+                'cash': -selected.cost,
+                'burn': burn_delta,
+            }
         
         elif action_id == "find_customers":
             new_customers = random.randint(1, 5)
@@ -536,9 +652,10 @@ class ActionSystem:
             return True, f"Pozyskano {new_customers} klientów! MRR +{new_customers * avg_mrr} PLN", {}
         
         elif action_id == "hire_employee":
+            before_burn = company.monthly_burn_rate
             company.employees += 1
-            company.monthly_burn_rate += 12000
-            return True, "Zatrudniono pracownika! Burn +12k PLN/mies", {}
+            burn_delta = _recalc_burn_delta(before_burn)
+            return True, "Zatrudniono pracownika!", {'burn': burn_delta}
         
         elif action_id == "seek_investor":
             if random.random() < 0.3:
@@ -549,31 +666,35 @@ class ActionSystem:
             return True, "Rozmowy trwają... Brak oferty w tym miesiącu.", {}
         
         elif action_id == "get_loan":
+            before_burn = company.monthly_burn_rate
             amount = 50000
             company.cash_on_hand += amount
-            company.monthly_burn_rate += 1000
-            return True, f"Pożyczka {amount:,} PLN. Rata: 1k PLN/mies", {}
+            company.extra_monthly_costs += 1000
+            burn_delta = _recalc_burn_delta(before_burn)
+            return True, f"Pożyczka {amount:,} PLN. Rata: 1k PLN/mies", {'cash': amount, 'burn': burn_delta}
 
         elif action_id == "invite_partner":
             return self._invite_partner(company)
 
         elif action_id == "cut_costs":
+            before_burn = company.monthly_burn_rate
             reduction = random.uniform(0.3, 0.5)
-            old_burn = company.monthly_burn_rate
-            company.monthly_burn_rate = int(company.monthly_burn_rate * (1 - reduction))
-            saved = old_burn - company.monthly_burn_rate
+            company.cost_multiplier *= (1 - reduction)
+            burn_delta = _recalc_burn_delta(before_burn)
             return True, f"Burn obcięty o {reduction*100:.0f}%! Oszczędność: {saved:,.0f} PLN/mies", {
-                'burn': -saved
+                'burn': burn_delta
             }
 
         elif action_id == "emergency_funding":
+            before_burn = company.monthly_burn_rate
             amount = random.randint(10000, 20000)
             payment = int(amount * 0.015)
             company.cash_on_hand += amount
-            company.monthly_burn_rate += payment
+            company.extra_monthly_costs += payment
+            burn_delta = _recalc_burn_delta(before_burn)
             return True, f"Pożyczka {amount:,.0f} PLN. Rata: ~{payment:,.0f} PLN/mies", {
                 'cash': amount,
-                'burn': payment
+                'burn': burn_delta
             }
 
         elif action_id == "revenue_advance":
@@ -695,8 +816,9 @@ class BiznesShell(cmd.Cmd):
         c = self.game_state.company
         month = self.game_state.current_month
         
+        remaining = max(0, self.max_actions_per_month - self.actions_this_month)
         print(colored(f"\n{'═'*60}", Colors.CYAN))
-        print(colored(f"  Mies. {month} | 💰 {c.cash_on_hand:,.0f} | MRR: {c.mrr:,.0f} | ⏱️ {c.runway_months()} mies", Colors.DIM))
+        print(colored(f"  Mies. {month} | 💰 {c.cash_on_hand:,.0f} | MRR: {c.mrr:,.0f} | ⏱️ {c.runway_months()} mies | ⚡ {remaining}/{self.max_actions_per_month}", Colors.DIM))
         print(colored(f"{'═'*60}", Colors.CYAN))
         
         # NOWE: Pasek ryzyka ZAWSZE widoczny
@@ -732,9 +854,89 @@ class BiznesShell(cmd.Cmd):
         self.save_dir.mkdir(exist_ok=True)
         self.action_history: List[Dict] = []
         self.actions_this_month: int = 0
+        self.actions_taken_this_month: int = 0
+        self.max_actions_taken_per_month: int = 10
         self.max_actions_per_month: int = 2
         self.partners_data: List[Dict] = []  # Dane wielu wspólników
         self.mentor_mode: bool = True  # P2: Tryb mentor domyślnie włączony
+
+        self._ap_system = ActionPointSystem()
+        self._cost_calc = CostCalculator()
+
+    def _recalculate_company_burn(self) -> None:
+        if not self.game_state:
+            return
+        self.game_state.company.monthly_burn_rate = float(self._cost_calc.total_burn(self.game_state))
+
+    def _recalculate_action_points(self) -> None:
+        if not self.game_state:
+            return
+        self.max_actions_per_month = int(self._ap_system.get_monthly_points(self.game_state))
+
+    def _choose_action_mode(self, action: GameAction, remaining_points: int) -> Optional[ActionMode]:
+        if not action.modes:
+            return None
+        if not self.game_state:
+            return None
+
+        company = self.game_state.company
+
+        print(colored("\n  JAK CHCESZ TO ZROBIĆ?", Colors.CYAN))
+
+        modes: List[Tuple[str, ActionMode]] = list(action.modes.items())
+        for i, (_, m) in enumerate(modes, 1):
+            rate = float(m.success_rate)
+            if m.requires_skill and m.requires_skill not in ["legal", "financial"]:
+                if self.game_state.player_role != m.requires_skill:
+                    rate = max(0.05, min(0.99, rate - 0.2))
+
+            ok_cash = company.cash_on_hand >= float(m.cost)
+            ok_time = remaining_points >= int(m.time_cost)
+            available = ok_cash and ok_time
+
+            status = colored("✓", Colors.GREEN) if available else colored("✗", Colors.RED)
+            reason = ""
+            if not ok_cash:
+                reason = "brak gotówki"
+            elif not ok_time:
+                reason = "brak punktów"
+
+            cost_txt = f"{m.cost:,} PLN" if m.cost else "0 PLN"
+            time_txt = f"{m.time_cost}" if m.time_cost != 0 else "0"
+            succ_txt = f"{rate*100:.0f}%"
+
+            line = f"  {colored(str(i), Colors.GREEN)}. {status} {m.name}"
+            meta = f"Koszt: {cost_txt} | Czas: {time_txt} | Sukces: {succ_txt}"
+            if reason:
+                meta += f" | {reason}"
+            print(line)
+            print(colored(f"     {meta}", Colors.DIM))
+
+        while True:
+            raw = self._ask("Wybierz tryb (Enter = domyślny)", "")
+            if not raw:
+                # domyślny: pierwszy dostępny
+                for _, m in modes:
+                    if company.cash_on_hand >= float(m.cost) and remaining_points >= int(m.time_cost):
+                        return m
+                return None
+            try:
+                idx = int(raw) - 1
+            except ValueError:
+                print(colored("Wybierz numer.", Colors.RED))
+                continue
+
+            if 0 <= idx < len(modes):
+                _, m = modes[idx]
+                if company.cash_on_hand < float(m.cost):
+                    print(colored("Brak gotówki na ten tryb.", Colors.RED))
+                    continue
+                if remaining_points < int(m.time_cost):
+                    print(colored("Brak punktów akcji na ten tryb.", Colors.RED))
+                    continue
+                return m
+
+            print(colored("Nieprawidłowy wybór.", Colors.RED))
     
     def _ask(self, prompt: str, default: str = "") -> str:
         if default:
@@ -830,8 +1032,14 @@ class BiznesShell(cmd.Cmd):
         c = self.game_state.company
         month = self.game_state.current_month
         
+        self._recalculate_company_burn()
+
+        effective_mrr = c.mrr
+        if getattr(self.game_state, "revenue_advance_months", 0) > 0:
+            effective_mrr = max(0.0, c.mrr - getattr(self.game_state, "revenue_advance_mrr", 0.0))
+
         # Przewidywany runway po następnym miesiącu
-        net_burn = c.monthly_burn_rate - c.mrr
+        net_burn = c.monthly_burn_rate - effective_mrr
         projected_cash = c.cash_on_hand - net_burn
         
         if projected_cash < 0:
@@ -1544,7 +1752,10 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         company = Company(name=f"{self.config.player_name}'s Startup")
         company.legal_form = LegalForm.PSA if self.config.legal_form == "psa" else LegalForm.SP_ZOO
         company.cash_on_hand = self.config.initial_cash
-        company.monthly_burn_rate = self.config.monthly_burn
+        company.founder_living_cost = 3000.0
+        company.cost_multiplier = 1.0
+        company.extra_monthly_costs = max(0.0, float(self.config.monthly_burn) - company.founder_living_cost)
+        company.monthly_burn_rate = float(self.config.monthly_burn)
         company.esop_pool_percentage = self.config.esop_pool
         company.mvp_completed = self.config.player_has_mvp
         
@@ -1595,6 +1806,9 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         self.game_state.founders_agreement = FoundersAgreement()
         self.game_state.mvp_progress = 100 if self.config.player_has_mvp else 0
         self.action_system = ActionSystem(self.game_state, self.config)
+
+        self._recalculate_company_burn()
+        self._recalculate_action_points()
     
     def _show_initial_summary(self):
         """Podsumowanie początkowe"""
@@ -1628,7 +1842,10 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                 return
         
         self.game_state.current_month += 1
-        self.actions_this_month = 0  # Reset licznika akcji
+        self.actions_this_month = 0  # zużyte punkty akcji
+        self.actions_taken_this_month = 0
+        self._recalculate_action_points()
+        self._recalculate_company_burn()
         month = self.game_state.current_month
         
         print(colored(f"\n{'═'*60}", Colors.CYAN))
@@ -1638,6 +1855,8 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         # Automatyczne zmiany
         company = self.game_state.company
         changes = []
+
+        self._recalculate_company_burn()
 
         effective_mrr = company.mrr
         if getattr(self.game_state, "revenue_advance_months", 0) > 0:
@@ -1674,6 +1893,8 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             company.paying_customers += new_cust
             company.mrr += new_cust * avg_rev
             changes.append(f"📈 +{new_cust} klientów, MRR +{new_cust * avg_rev:,.0f}")
+
+        self._recalculate_company_burn()
         
         if company.mrr > 0:
             company.current_valuation = company.mrr * 12 * 5
@@ -1768,10 +1989,10 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                     idx += 1
         
         print(colored("\n" + "─"*60, Colors.CYAN))
-        remaining = self.max_actions_per_month - self.actions_this_month
-        print(colored(f"  Pozostało akcji w tym miesiącu: {remaining}", Colors.YELLOW))
+        remaining = max(0, self.max_actions_per_month - self.actions_this_month)
+        print(colored(f"  Pozostało punktów akcji: {remaining}/{self.max_actions_per_month}", Colors.YELLOW))
         
-        while self.actions_this_month < self.max_actions_per_month:
+        while self.actions_this_month < self.max_actions_per_month and self.actions_taken_this_month < self.max_actions_taken_per_month:
             choice = self._ask("Akcja (numer) lub 'pomiń'", "pomiń")
             
             if choice.lower() in ['pomiń', 'pomin', 'skip', '', 'p']:
@@ -1786,9 +2007,9 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                         print(colored(f"\n❌ Ta akcja jest zablokowana: {reason}", Colors.RED))
                         continue
                     self._execute_action(selected)
-                    remaining = self.max_actions_per_month - self.actions_this_month
+                    remaining = max(0, self.max_actions_per_month - self.actions_this_month)
                     if remaining > 0:
-                        print(colored(f"\n  Pozostało akcji: {remaining}", Colors.YELLOW))
+                        print(colored(f"\n  Pozostało punktów: {remaining}", Colors.YELLOW))
             except ValueError:
                 pass
     
@@ -1827,12 +2048,24 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                 for line in edu_content['common_mistake'].strip().split('\n'):
                     print(f"   {line}")
         
+        remaining_points = max(0, self.max_actions_per_month - self.actions_this_month)
+        selected_mode = self._choose_action_mode(action, remaining_points)
+        time_cost = int(selected_mode.time_cost) if selected_mode else 1
+
+        if remaining_points < time_cost:
+            print(colored("\n❌ Brak punktów akcji na ten wybór.", Colors.RED))
+            return
+
         if self._ask_yes_no("\nWykonać?", True):
             # P1: Zapisz stan PRZED akcją
             before_state = self._get_state_snapshot()
             
-            success, msg, effects = self.action_system.execute_action(action.id)
-            
+            success, msg, effects = self.action_system.execute_action(action.id, selected_mode)
+
+            # Burn i punkty akcji mogą zależeć od stanu (np. spółka/SHA/klienci)
+            self._recalculate_company_burn()
+            self._recalculate_action_points()
+
             # P1: Zapisz stan PO akcji
             after_state = self._get_state_snapshot()
             
@@ -1877,7 +2110,8 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
                 'success': success,
                 'effects': history_effects
             })
-            self.actions_this_month += 1
+            self.actions_this_month += time_cost
+            self.actions_taken_this_month += 1
     
     def _show_lessons(self):
         """Wnioski po przegranej"""
@@ -2002,7 +2236,8 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             changes.append(f"{sign}{effects['cash']:,.0f} PLN gotówki")
         
         if 'burn' in effects:
-            company.monthly_burn_rate = max(0, company.monthly_burn_rate + effects['burn'])
+            company.extra_monthly_costs += effects['burn']
+            self._recalculate_company_burn()
             sign = '+' if effects['burn'] > 0 else ''
             changes.append(f"Burn {sign}{effects['burn']:,.0f}/mies")
         

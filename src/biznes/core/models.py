@@ -200,6 +200,8 @@ class Company:
     mrr: float = 0.0
     arr: float = 0.0
 
+    founder_living_cost: float = 3000.0
+
     cost_multiplier: float = 1.0
     extra_monthly_costs: float = 0.0
     
@@ -298,6 +300,7 @@ class GameEvent:
             
         if self.burn_rate_change != 0:
             company.extra_monthly_costs += self.burn_rate_change
+            company.monthly_burn_rate += self.burn_rate_change
             changes['burn_rate'] = self.burn_rate_change
             
         if self.valuation_multiplier != 1.0:
@@ -332,7 +335,7 @@ class CostCalculator:
         c = state.company
         costs: Dict[str, int] = {}
 
-        costs['founder_living'] = 3000
+        costs['founder_living'] = int(getattr(c, 'founder_living_cost', 3000) or 3000)
 
         if c.registered:
             costs['accounting'] = 1000

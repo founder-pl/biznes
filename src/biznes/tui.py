@@ -15,6 +15,13 @@ from textual.screen import Screen, ModalScreen
 from textual.message import Message
 from typing import Optional, List, Dict, Tuple
 import random
+from pathlib import Path
+from datetime import datetime
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 from .core.models import (
     GameState, PlayerConfig, Company, Founder,
@@ -466,6 +473,8 @@ class GameScreen(Screen):
         Binding("p", "portfele", "Portfele"),
         Binding("e", "equity", "Equity"),
         Binding("h", "historia", "Historia"),
+        Binding("s", "save_game", "Zapisz"),
+        Binding("l", "load_game", "Wczytaj"),
         Binding("q", "quit_game", "Wyjście"),
     ]
     
@@ -876,6 +885,18 @@ class GameScreen(Screen):
                 'risks': ["Bez umowy: KRYTYCZNE RYZYKO sporów!"],
                 'warning': "⚠️ BEZ UMOWY RYZYKUJESZ WSZYSTKO!" if has_partner else ""
             })
+
+        # PARTNER
+        if not has_partner:
+            actions.append({
+                'id': 'invite_partner', 'name': '👥 Zaproś wspólnika',
+                'description': "Dodaj co-foundera do spółki",
+                'available': True,
+                'recommended': not self.game_state.agreement_signed,
+                'consequences': ["Partner otrzyma 20% equity", "Twoje equity spadnie"],
+                'benefits': ["Podział obowiązków", "Więcej kompetencji", "Mniejsze ryzyko wypalenia"],
+                'risks': ["Rozwodnienie", "Potencjalne konflikty (podpisz SHA!)"]
+            })
         
         # PRODUKT
         if not c.mvp_completed:
@@ -1018,6 +1039,11 @@ class GameScreen(Screen):
                 self.game_state.founders_agreement.signed = True
                 effect_msg = f"-{cost} PLN, SHA podpisana"
                 self._log_action(action['name'], effect_msg)
+
+        elif action['id'] == 'invite_partner':
+            result = self._invite_partner()
+            effect_msg = result[1]
+            self._log_action(action['name'], effect_msg)
         
         elif action['id'] == 'mvp':
             progress = random.randint(20, 35)
@@ -1215,8 +1241,50 @@ class GameScreen(Screen):
         elif action_id == "pivot":
             lines.append("• Pivot to koszt (utrata części pracy), ale szansa na lepszy PMF")
             lines.append("• Upewnij się, że pivot wynika z danych, nie z frustracji")
+        elif action_id == "invite_partner":
+            lines.append("• Masz teraz co-foundera – dzielicie odpowiedzialność")
+            lines.append("• KRYTYCZNE: Podpiszcie SHA, zanim pojawią się konflikty!")
+            lines.append("• Wspólnik komplementuje Twoje kompetencje")
 
         return lines
+
+    def _invite_partner(self) -> Tuple[bool, str, Dict]:
+        """Add a co-founder to the company with default values."""
+        c = self.game_state.company
+
+        has_partner = any((not f.is_player) and (not getattr(f, 'left_company', False)) for f in c.founders)
+        if has_partner:
+            return False, "Masz już wspólnika.", {}
+
+        player = next((f for f in c.founders if f.is_player), None)
+        if not player:
+            return False, "Brak gracza w spółce.", {}
+
+        partner_equity = 20.0
+        partner_role = "business" if player.role == "technical" else "technical"
+
+        partner = Founder(
+            name="Partner",
+            role=partner_role,
+            equity_percentage=partner_equity,
+            initial_investment=0.0,
+            personal_invested=0.0,
+            is_player=False,
+        )
+        c.founders.append(partner)
+
+        player.equity_percentage = max(0.0, player.equity_percentage - partner_equity)
+
+        self.app.config.has_partner = True
+        self.app.config.partner_name = partner.name
+        self.app.config.partner_equity = partner.equity_percentage
+        self.app.config.player_equity = player.equity_percentage
+
+        msg = f"Dodano wspólnika ({partner_equity:.0f}%)"
+        if not self.game_state.agreement_signed:
+            msg += " Teraz podpisz SHA!"
+
+        return True, msg, {'equity_change': -partner_equity}
     
     def _log_action(self, name: str, effect: str) -> None:
         short_name = name[:35]
@@ -1308,6 +1376,166 @@ class GameScreen(Screen):
     
     def action_quit_game(self) -> None:
         self.app.pop_screen()
+
+    def action_save_game(self) -> None:
+        if not self.game_state or not yaml:
+            self.app.push_screen(EventModal("negative", "Błąd", "Zapis niedostępny (brak modułu yaml)", ""))
+            return
+        save_dir = Path.home() / ".biznes_saves"
+        save_dir.mkdir(exist_ok=True)
+        name = f"tui_save_{datetime.now().strftime('%Y%m%d_%H%M')}"
+        path = save_dir / f"{name}.yaml"
+
+        data = {
+            'player_name': self.app.config.player_name,
+            'player_role': self.app.config.player_role,
+            'has_partner': self.app.config.has_partner,
+            'partner_name': self.app.config.partner_name,
+            'player_equity': self.app.config.player_equity,
+            'partner_equity': self.app.config.partner_equity,
+            'esop_pool': self.app.config.esop_pool,
+            'legal_form': self.app.config.legal_form,
+            'month': self.game_state.current_month,
+            'cash': self.game_state.company.cash_on_hand,
+            'mrr': self.game_state.company.mrr,
+            'burn': self.game_state.company.monthly_burn_rate,
+            'customers': self.game_state.company.paying_customers,
+            'registered': self.game_state.company.registered,
+            'mvp_completed': self.game_state.company.mvp_completed,
+            'agreement_signed': self.game_state.agreement_signed,
+            'mvp_progress': self.game_state.mvp_progress,
+            'revenue_advance_months': getattr(self.game_state, 'revenue_advance_months', 0),
+            'revenue_advance_mrr': getattr(self.game_state, 'revenue_advance_mrr', 0.0),
+            'founders': [
+                {
+                    'name': f.name, 'role': f.role,
+                    'equity_percentage': f.equity_percentage,
+                    'vested_percentage': f.vested_percentage,
+                    'months_in_company': f.months_in_company,
+                    'cliff_completed': f.cliff_completed,
+                    'personal_invested': f.personal_invested,
+                    'is_player': f.is_player,
+                }
+                for f in self.game_state.company.founders
+            ],
+        }
+        with open(path, 'w') as f:
+            yaml.dump(data, f)
+        self.app.push_screen(EventModal("positive", "✅ Zapisano", f"Gra zapisana jako: {name}", str(path)))
+
+    def action_load_game(self) -> None:
+        if not yaml:
+            self.app.push_screen(EventModal("negative", "Błąd", "Wczytywanie niedostępne (brak modułu yaml)", ""))
+            return
+        self.app.push_screen(SaveLoadScreen(), self._on_load_result)
+
+    def _on_load_result(self, save_data: Optional[Dict]) -> None:
+        if not save_data:
+            return
+        self._restore_from_save(save_data)
+        self._update_display()
+
+    def _restore_from_save(self, data: Dict) -> None:
+        self.app.config.player_name = data.get('player_name', 'Founder')
+        self.app.config.player_role = data.get('player_role', 'technical')
+        self.app.config.has_partner = data.get('has_partner', False)
+        self.app.config.partner_name = data.get('partner_name', '')
+        self.app.config.player_equity = data.get('player_equity', 50)
+        self.app.config.partner_equity = data.get('partner_equity', 40)
+        self.app.config.esop_pool = data.get('esop_pool', 10)
+        self.app.config.legal_form = data.get('legal_form', 'psa')
+        self.app.config.initial_cash = data.get('cash', 10000)
+        self.app.config.monthly_burn = data.get('burn', 5000)
+
+        self._initialize_game()
+
+        self.game_state.current_month = data.get('month', 0)
+        self.game_state.company.cash_on_hand = data.get('cash', 10000)
+        self.game_state.company.mrr = data.get('mrr', 0)
+        self.game_state.company.paying_customers = data.get('customers', 0)
+        self.game_state.company.total_customers = data.get('customers', 0)
+        self.game_state.company.registered = data.get('registered', False)
+        self.game_state.company.mvp_completed = data.get('mvp_completed', False)
+        self.game_state.agreement_signed = data.get('agreement_signed', False)
+        self.game_state.mvp_progress = data.get('mvp_progress', 0)
+        self.game_state.revenue_advance_months = int(data.get('revenue_advance_months', 0) or 0)
+        self.game_state.revenue_advance_mrr = float(data.get('revenue_advance_mrr', 0.0) or 0.0)
+
+        founders_data = data.get('founders')
+        if isinstance(founders_data, list) and founders_data:
+            restored: List[Founder] = []
+            for fdata in founders_data:
+                if not isinstance(fdata, dict):
+                    continue
+                restored.append(Founder(
+                    name=fdata.get('name', ''),
+                    role=fdata.get('role', ''),
+                    equity_percentage=float(fdata.get('equity_percentage', 0.0) or 0.0),
+                    vested_percentage=float(fdata.get('vested_percentage', 0.0) or 0.0),
+                    months_in_company=int(fdata.get('months_in_company', 0) or 0),
+                    cliff_completed=bool(fdata.get('cliff_completed', False)),
+                    personal_invested=float(fdata.get('personal_invested', 0.0) or 0.0),
+                    is_player=bool(fdata.get('is_player', False)),
+                ))
+            if restored:
+                if not any(f.is_player for f in restored):
+                    restored[0].is_player = True
+                self.game_state.company.founders = restored
+                self.app.config.has_partner = any((not f.is_player) for f in restored)
+
+
+class SaveLoadScreen(ModalScreen[Optional[Dict]]):
+    """Ekran wyboru zapisu do wczytania"""
+
+    BINDINGS = [Binding("escape", "cancel", "Anuluj")]
+
+    def compose(self) -> ComposeResult:
+        save_dir = Path.home() / ".biznes_saves"
+        saves = []
+        if save_dir.exists() and yaml:
+            for f in sorted(save_dir.glob("*.yaml"), reverse=True)[:10]:
+                try:
+                    with open(f) as file:
+                        data = yaml.safe_load(file) or {}
+                    saves.append({'name': f.stem, 'path': f, 'data': data})
+                except Exception:
+                    pass
+
+        items = []
+        if saves:
+            for i, s in enumerate(saves):
+                month = s['data'].get('month', '?')
+                cash = s['data'].get('cash', 0)
+                items.append(
+                    ListItem(Label(f"{s['name']} (mies. {month}, {cash:,.0f} PLN)"), id=f"save-{i}")
+                )
+        else:
+            items.append(ListItem(Label("Brak zapisów"), id="save-none"))
+
+        self._saves = saves
+        yield Container(
+            Static("💾 WCZYTAJ GRĘ", classes="modal-title"),
+            Rule(),
+            ListView(*items, id="saves-list"),
+            Rule(),
+            Button("Anuluj", id="cancel"),
+            classes="save-load-modal",
+        )
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item_id = event.item.id or ""
+        if item_id.startswith("save-") and item_id != "save-none":
+            idx = int(item_id.split("-")[1])
+            if idx < len(self._saves):
+                self.dismiss(self._saves[idx]['data'])
+                return
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class FinanceScreen(Screen):
@@ -1901,6 +2129,7 @@ class BiznesApp(App):
     .warnings-actions { align: center middle; height: auto; }
 
     .action-result-modal { align: center middle; width: 78; height: auto; border: double $success; padding: 2; background: $surface; }
+    .save-load-modal { align: center middle; width: 70; height: auto; border: solid $primary; padding: 2; background: $surface; }
     .action-title { text-style: bold; }
     .action-message { color: $text; }
     .section-title { text-style: bold; color: $primary; }
