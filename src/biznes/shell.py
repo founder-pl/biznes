@@ -85,6 +85,102 @@ class GameAction:
     cost: float = 0.0
     recommended: bool = False
     warning: str = ""
+    
+    # P1: Edukacyjne opisy
+    educational_why: str = ""  # Dlaczego to ważne
+    real_world_example: str = ""  # Przykład z życia
+    statistics: str = ""  # Dane/statystyki
+    common_mistake: str = ""  # Częsty błąd
+
+
+# Słownik edukacyjnych opisów akcji
+EDUCATIONAL_CONTENT = {
+    "register_company": {
+        "educational_why": """Rejestracja spółki daje Ci:
+  • Ochronę majątku osobistego (odpowiedzialność ograniczona)
+  • Możliwość wystawiania faktur i zawierania umów
+  • Wiarygodność dla klientów i inwestorów
+  • Możliwość pozyskania finansowania""",
+        "real_world_example": """HISTORIA: Founder działał 8 mies. bez spółki. Klient 
+  zamówił produkt za 50k PLN, ale nie mógł przelać na konto 
+  prywatne. Stracił kontrakt.""",
+        "statistics": "73% inwestorów odmawia rozmów bez zarejestrowanej spółki",
+        "common_mistake": """❌ BŁĄD: "Zarejestruję jak znajdę inwestora"
+✅ DOBRZE: Rejestracja w mies. 1-2, nawet bez inwestora"""
+    },
+    "sign_agreement": {
+        "educational_why": """SHA (Shareholders Agreement) określa:
+  • Jak dzielicie się udziałami (equity split)
+  • Co się dzieje gdy ktoś odchodzi (good/bad leaver)
+  • Kto podejmuje jakie decyzje
+  • Jak rozwiązywać konflikty
+  • Vesting schedule (nabywanie udziałów w czasie)""",
+        "real_world_example": """HISTORIA: Dwóch founderów bez SHA zbudowało apkę 
+  za 500k PLN. Partner odszedł po 6 mies z 50% equity i kodem.
+  Sąd trwał 3 lata. Startup upadł.""",
+        "statistics": "67% konfliktów founderów wynika z braku SHA",
+        "common_mistake": """❌ BŁĄD: "Podpiszemy jak znajdziemy inwestora"
+✅ DOBRZE: SHA PRZED wspólną pracą, nawet prostą"""
+    },
+    "develop_mvp": {
+        "educational_why": """MVP (Minimum Viable Product) to:
+  • Najszybszy sposób na walidację pomysłu
+  • Minimalna wersja produktu do testów z klientami
+  • Podstawa do zbierania feedbacku""",
+        "real_world_example": """Dropbox zaczął od 3-minutowego video demo zanim 
+  napisali linijkę kodu. Zebrali 70k zapisów na waiting list.""",
+        "statistics": "42% startupów upada bo budują produkt którego nikt nie chce",
+        "common_mistake": """❌ BŁĄD: Budowanie "idealnego" produktu przez miesiące
+✅ DOBRZE: Wypuść cokolwiek w 4-8 tygodni i iteruj"""
+    },
+    "find_customers": {
+        "educational_why": """Klienci płacący to:
+  • Walidacja że ktoś chce Twój produkt (PMF)
+  • MRR = Monthly Recurring Revenue
+  • Feedback do ulepszania produktu
+  • Dowód dla inwestorów""",
+        "real_world_example": """Airbnb founderzy sami chodzili do pierwszych klientów,
+  robili im zdjęcia mieszkań. Bezpośredni kontakt = wiedza.""",
+        "statistics": "Startupy z >10 płacących klientów mają 3x większą szansę na rundę",
+        "common_mistake": """❌ BŁĄD: "Najpierw dokończę produkt, potem sprzedaż"
+✅ DOBRZE: Szukaj klientów od dnia 1, nawet z prototypem"""
+    },
+    "seek_investor": {
+        "educational_why": """Inwestor VC/anioł to:
+  • Kapitał na szybki wzrost
+  • Kontakty i mentoring (smart money)
+  • Walidacja przez doświadczonych
+  Ale UWAGA: rozwodnienie i presja na wzrost""",
+        "real_world_example": """Slack zebrał 340M$ przed generowaniem przychodu.
+  Większość startupów NIE potrzebuje VC - bootstrapping też działa.""",
+        "statistics": "Tylko 1% startupów dostaje funding VC. Mediana rundy seed: 2M PLN",
+        "common_mistake": """❌ BŁĄD: "Muszę mieć inwestora żeby zacząć"
+✅ DOBRZE: Inwestor gdy masz PMF i potrzebujesz skalować"""
+    },
+    "hire_employee": {
+        "educational_why": """Zatrudnienie to:
+  • Szybszy rozwój produktu/sprzedaży
+  • Nowe kompetencje w zespole
+  ALE: +12-15k PLN/mies kosztu, zobowiązania prawne""",
+        "real_world_example": """WhatsApp miał 55 pracowników przy 900M użytkowników.
+  Instagram: 13 osób przy sprzedaży za 1B$. Mniej = więcej.""",
+        "statistics": "Przedwczesne zatrudnianie to #3 powód upadku startupów",
+        "common_mistake": """❌ BŁĄD: Zatrudniać przed product-market fit
+✅ DOBRZE: Najpierw PMF, potem skalowanie zespołu"""
+    },
+    "pivot": {
+        "educational_why": """Pivot to zmiana kierunku gdy:
+  • Obecny produkt nie znajduje klientów
+  • Rynek się zmienił
+  • Odkryłeś lepszą okazję
+  Lepiej pivotować niż upaść.""",
+        "real_world_example": """YouTube zaczął jako serwis randkowy (video dating).
+  Slack był grą MMORPG. Twitter - podcasty. Pivot uratował je.""",
+        "statistics": "93% udanych startupów zrobiło co najmniej 1 pivot",
+        "common_mistake": """❌ BŁĄD: Pivotować co miesiąc bez testów
+✅ DOBRZE: Daj pomysłowi 3-6 mies, zbierz dane, decyduj"""
+    }
+}
 
 
 class ActionSystem:
@@ -406,13 +502,24 @@ class BiznesShell(cmd.Cmd):
             self._show_main_menu()
     
     def _show_game_menu(self):
-        """Wyświetla menu podczas gry"""
+        """Wyświetla menu podczas gry z widocznymi ryzykami"""
         c = self.game_state.company
         month = self.game_state.current_month
         
-        print(colored(f"\n{'─'*50}", Colors.CYAN))
+        print(colored(f"\n{'═'*60}", Colors.CYAN))
         print(colored(f"  Mies. {month} | 💰 {c.cash_on_hand:,.0f} | MRR: {c.mrr:,.0f} | ⏱️ {c.runway_months()} mies", Colors.DIM))
-        print(colored(f"{'─'*50}", Colors.CYAN))
+        print(colored(f"{'═'*60}", Colors.CYAN))
+        
+        # NOWE: Pasek ryzyka ZAWSZE widoczny
+        risk_bar = self._get_risk_indicators()
+        risk_color = Colors.RED if "🔴" in risk_bar else Colors.YELLOW if "🟡" in risk_bar or "🟠" in risk_bar else Colors.GREEN
+        print(colored(f"  ⚠️  {risk_bar}", risk_color))
+        print(colored(f"{'─'*60}", Colors.CYAN))
+        
+        # NOWE: Priorytet teraz
+        self._show_priority_box()
+        
+        print(colored(f"\n{'─'*60}", Colors.CYAN))
         print(f"  {colored('1', Colors.GREEN)}. ▶️  Następny miesiąc")
         print(f"  {colored('2', Colors.GREEN)}. 📊 Status")
         print(f"  {colored('3', Colors.GREEN)}. ⚡ Akcje")
@@ -438,6 +545,7 @@ class BiznesShell(cmd.Cmd):
         self.actions_this_month: int = 0
         self.max_actions_per_month: int = 2
         self.partners_data: List[Dict] = []  # Dane wielu wspólników
+        self.mentor_mode: bool = True  # P2: Tryb mentor domyślnie włączony
     
     def _ask(self, prompt: str, default: str = "") -> str:
         if default:
@@ -478,6 +586,553 @@ class BiznesShell(cmd.Cmd):
         response = self._ask(f"{prompt} (tak/nie)", "tak" if default else "nie")
         return response.lower() in ['tak', 't', 'yes', 'y', '1']
     
+    # ========================================================================
+    # P0: PASEK RYZYKA - ZAWSZE WIDOCZNY
+    # ========================================================================
+    
+    def _get_risk_indicators(self) -> str:
+        """Zwraca wizualne wskaźniki ryzyka"""
+        if not self.game_state:
+            return ""
+        
+        c = self.game_state.company
+        risks = []
+        
+        # Runway
+        runway = c.runway_months()
+        if runway < 3:
+            risks.append("🔴 RUNWAY: KRYTYCZNY!")
+        elif runway < 6:
+            risks.append("🟡 RUNWAY: NISKI")
+        
+        # SHA
+        if self.config and self.config.has_partner and not self.game_state.agreement_signed:
+            risks.append("🔴 SHA: BRAK UMOWY!")
+        
+        # Spółka
+        if not c.registered and self.game_state.current_month > 3:
+            risks.append("🟡 SPÓŁKA: NIEZAREJESTROWANA")
+        
+        # PMF
+        if self.game_state.current_month > 6 and c.paying_customers < 5:
+            risks.append("🟠 PMF: BRAK TRAKCJI")
+        
+        # MVP
+        if not c.mvp_completed and self.game_state.current_month > 4:
+            risks.append("🟡 MVP: NIEUKOŃCZONE")
+        
+        return " | ".join(risks) if risks else "✅ Brak krytycznych ryzyk"
+    
+    # ========================================================================
+    # P0: PRIORYTET TERAZ - CO JEST NAJWAŻNIEJSZE
+    # ========================================================================
+    
+    def _get_priority_action(self) -> Tuple[str, str, str]:
+        """Zwraca (akcja, dlaczego, konsekwencja_braku)"""
+        if not self.game_state:
+            return ("", "", "")
+        
+        c = self.game_state.company
+        month = self.game_state.current_month
+        
+        # Hierarchia priorytetów (od najważniejszego)
+        
+        # 1. Krytyczny runway
+        if c.runway_months() < 3:
+            return (
+                "🚨 SZUKAJ FINANSOWANIA LUB KLIENTÓW",
+                f"Masz mniej niż 3 miesiące runway ({c.runway_months()} mies)",
+                f"Bez działania: BANKRUCTWO w ~{c.runway_months()} mies"
+            )
+        
+        # 2. Brak SHA z partnerem
+        if self.config and self.config.has_partner and not self.game_state.agreement_signed:
+            return (
+                "📝 PODPISZ SHA (umowę wspólników)",
+                "Bez umowy partner może odejść z kodem/klientami",
+                "Bez SHA: 40% startupów z konfliktami founderów upada"
+            )
+        
+        # 3. Niezarejestrowana spółka
+        if not c.registered and month > 2:
+            return (
+                "🏢 ZAREJESTRUJ SPÓŁKĘ",
+                "Bez spółki nie możesz legalnie pozyskać inwestora",
+                "Bez rejestracji: Brak ochrony prawnej, odpowiadasz osobiście"
+            )
+        
+        # 4. Brak MVP
+        if not c.mvp_completed:
+            return (
+                "🔧 DOKOŃCZ MVP",
+                "Bez produktu nie zdobędziesz klientów",
+                "Bez MVP: Spalisz gotówkę bez walidacji pomysłu"
+            )
+        
+        # 5. Brak klientów po MVP
+        if c.mvp_completed and c.paying_customers < 10:
+            return (
+                "🎯 ZDOBĄDŹ KLIENTÓW",
+                "Klienci = walidacja + MRR",
+                "Bez klientów: Brak dowodu PMF dla inwestorów"
+            )
+        
+        # 6. Niski runway (ale nie krytyczny)
+        if c.runway_months() < 6:
+            return (
+                "💰 WYDŁUŻ RUNWAY",
+                f"Masz tylko {c.runway_months()} miesięcy runway",
+                "Zalecane minimum to 6 miesięcy"
+            )
+        
+        return (
+            "📈 ROZWIJAJ BIZNES",
+            "Masz podstawy, teraz skaluj",
+            ""
+        )
+    
+    def _show_priority_box(self):
+        """Pokazuje najważniejszą akcję do wykonania"""
+        action, why, consequence = self._get_priority_action()
+        
+        if not action:
+            return
+        
+        print(colored("\n╔══════════════════════════════════════════════════════╗", Colors.YELLOW))
+        print(colored("║  🎯 PRIORYTET TERAZ", Colors.BOLD))
+        print(colored("╠══════════════════════════════════════════════════════╣", Colors.YELLOW))
+        print(f"║  {colored(action, Colors.GREEN)}")
+        print(f"║  ")
+        print(f"║  📖 DLACZEGO: {why}")
+        if consequence:
+            print(f"║  ⚠️  RYZYKO: {colored(consequence, Colors.RED)}")
+        print(colored("╚══════════════════════════════════════════════════════╝", Colors.YELLOW))
+    
+    # ========================================================================
+    # P0: OSTRZEŻENIA PRZED PROBLEMAMI
+    # ========================================================================
+    
+    def _check_warnings_before_month(self) -> List[Dict]:
+        """Sprawdza i zwraca ostrzeżenia przed przejściem do następnego miesiąca"""
+        if not self.game_state:
+            return []
+        
+        warnings = []
+        c = self.game_state.company
+        month = self.game_state.current_month
+        
+        # Przewidywany runway po następnym miesiącu
+        net_burn = c.monthly_burn_rate - c.mrr
+        projected_cash = c.cash_on_hand - net_burn
+        
+        if projected_cash < 0:
+            warnings.append({
+                "level": "CRITICAL",
+                "title": "BANKRUCTWO ZA 1 MIESIĄC",
+                "message": f"Po tym miesiącu: {projected_cash:,.0f} PLN",
+                "action": "Natychmiast szukaj finansowania lub obetnij koszty"
+            })
+        elif c.runway_months() <= 3:
+            warnings.append({
+                "level": "HIGH",
+                "title": "NISKI RUNWAY",
+                "message": f"Pozostało tylko {c.runway_months()} miesięcy",
+                "action": "Zacznij szukać inwestora lub klientów"
+            })
+        
+        # Konflikt partnerski
+        if self.config and self.config.has_partner and not self.game_state.agreement_signed:
+            if month >= 3:
+                warnings.append({
+                    "level": "HIGH",
+                    "title": "RYZYKO KONFLIKTU",
+                    "message": f"{month}+ miesiące bez SHA = rosnące ryzyko sporów",
+                    "action": "Podpisz umowę wspólników ASAP"
+                })
+        
+        # PMF
+        if month >= 6 and c.paying_customers < 5:
+            warnings.append({
+                "level": "MEDIUM",
+                "title": "BRAK PRODUCT-MARKET FIT",
+                "message": f"Po {month} mies. masz tylko {c.paying_customers} klientów",
+                "action": "Rozważ pivot lub intensywną sprzedaż"
+            })
+        
+        # MVP nieukończone
+        if not c.mvp_completed and month >= 4:
+            warnings.append({
+                "level": "MEDIUM",
+                "title": "MVP OPÓŹNIONE",
+                "message": f"Po {month} miesiącach MVP wciąż w {self.game_state.mvp_progress}%",
+                "action": "Skup się na ukończeniu MVP"
+            })
+        
+        return warnings
+    
+    def _show_warnings(self, warnings: List[Dict]) -> bool:
+        """Wyświetla ostrzeżenia przed miesiącem. Zwraca False jeśli użytkownik anuluje."""
+        if not warnings:
+            return True
+        
+        print(colored("\n⚠️════════ OSTRZEŻENIA ════════⚠️", Colors.RED))
+        
+        for w in warnings:
+            if w["level"] == "CRITICAL":
+                color = Colors.RED
+                icon = "🔴"
+            elif w["level"] == "HIGH":
+                color = Colors.YELLOW
+                icon = "🟡"
+            else:
+                color = Colors.CYAN
+                icon = "🟠"
+            
+            print(colored(f"\n{icon} {w['title']}", color + Colors.BOLD))
+            print(f"   {w['message']}")
+            print(colored(f"   → Zalecenie: {w['action']}", Colors.CYAN))
+        
+        print(colored("\n════════════════════════════════", Colors.RED))
+        
+        if any(w["level"] == "CRITICAL" for w in warnings):
+            if not self._ask_yes_no("Czy na pewno chcesz kontynuować?", False):
+                return False
+        return True
+    
+    # ========================================================================
+    # P1: SZCZEGÓŁOWY FEEDBACK PO AKCJI
+    # ========================================================================
+    
+    def _show_action_result(self, action: GameAction, success: bool, 
+                            before_state: Dict, after_state: Dict, message: str):
+        """Pokazuje szczegółowy raport z konsekwencjami"""
+        
+        result_color = Colors.GREEN if success else Colors.RED
+        print(colored(f"\n┌─── REZULTAT AKCJI {'─'*40}┐", result_color))
+        print(f"│ {'✅' if success else '❌'} {action.name}")
+        print(f"│ {message}")
+        print(colored(f"├{'─'*55}┤", Colors.CYAN))
+        
+        # CO SIĘ ZMIENIŁO
+        print(colored("│ 📊 ZMIANY:", Colors.BOLD))
+        
+        changes = []
+        if before_state.get('cash') != after_state.get('cash'):
+            diff = after_state['cash'] - before_state['cash']
+            color = Colors.GREEN if diff > 0 else Colors.RED
+            after_cash = after_state['cash']
+            changes.append(f"   Gotówka: {before_state['cash']:,.0f} → {colored(f'{after_cash:,.0f}', color)} PLN ({diff:+,.0f})")
+        
+        if before_state.get('mrr') != after_state.get('mrr'):
+            diff = after_state['mrr'] - before_state['mrr']
+            color = Colors.GREEN if diff > 0 else Colors.RED
+            after_mrr = after_state['mrr']
+            changes.append(f"   MRR: {before_state['mrr']:,.0f} → {colored(f'{after_mrr:,.0f}', color)} PLN ({diff:+,.0f})")
+        
+        if before_state.get('customers') != after_state.get('customers'):
+            diff = after_state['customers'] - before_state['customers']
+            color = Colors.GREEN if diff > 0 else Colors.RED
+            changes.append(f"   Klienci: {before_state['customers']} → {colored(str(after_state['customers']), color)} ({diff:+d})")
+        
+        if before_state.get('registered') != after_state.get('registered') and after_state.get('registered'):
+            changes.append(f"   Spółka: ✗ → {colored('✓ ZAREJESTROWANA', Colors.GREEN)}")
+        
+        if before_state.get('agreement_signed') != after_state.get('agreement_signed') and after_state.get('agreement_signed'):
+            changes.append(f"   SHA: ✗ → {colored('✓ PODPISANA', Colors.GREEN)}")
+        
+        if before_state.get('mvp_progress') != after_state.get('mvp_progress'):
+            diff = after_state['mvp_progress'] - before_state['mvp_progress']
+            after_mvp = after_state['mvp_progress']
+            changes.append(f"   MVP: {before_state['mvp_progress']}% → {colored(f'{after_mvp}%', Colors.GREEN)} (+{diff}%)")
+        
+        if before_state.get('burn') != after_state.get('burn'):
+            diff = after_state['burn'] - before_state['burn']
+            color = Colors.RED if diff > 0 else Colors.GREEN
+            after_burn = after_state['burn']
+            changes.append(f"   Burn: {before_state['burn']:,.0f} → {colored(f'{after_burn:,.0f}', color)} PLN/mies")
+        
+        for change in changes:
+            print(f"│ {change}")
+        
+        if not changes:
+            print("│    Brak bezpośrednich zmian")
+        
+        # CO TO OZNACZA - kontekstowe wyjaśnienie
+        print(colored("│", Colors.CYAN))
+        print(colored("│ 💡 CO TO OZNACZA:", Colors.BOLD))
+        
+        if action.id == "register_company":
+            print("│    • Możesz teraz legalnie wystawiać faktury")
+            print("│    • Twój majątek osobisty jest chroniony")
+            print("│    • Możesz rozmawiać z inwestorami")
+            print(colored("│    ⚠️ PAMIĘTAJ: Od teraz masz obowiązki księgowe!", Colors.YELLOW))
+        elif action.id == "sign_agreement":
+            print("│    • Masz jasne zasady podziału equity")
+            print("│    • Vesting chroni przed odejściem partnera")
+            print("│    • Możesz bezpiecznie szukać inwestora")
+            print(colored("│    ✓ BRAWO: To kluczowa decyzja dla stabilności!", Colors.GREEN))
+        elif action.id == "develop_mvp":
+            if after_state.get('mvp_progress', 0) >= 100:
+                print("│    • 🎉 MVP UKOŃCZONE! Możesz szukać klientów")
+                print("│    • Twój produkt jest gotowy do testów rynkowych")
+            else:
+                remaining = 100 - after_state.get('mvp_progress', 0)
+                print(f"│    • Pozostało ~{remaining}% do ukończenia MVP")
+                print(f"│    • Szacunkowo {max(1, remaining // 25)} miesiące do końca")
+        elif action.id == "find_customers":
+            print(f"│    • Nowy MRR = recurring revenue")
+            print(f"│    • Każdy klient to dowód PMF")
+            if after_state.get('customers', 0) >= 10:
+                print(colored("│    ✓ Masz 10+ klientów - solidna podstawa do rundy!", Colors.GREEN))
+        elif action.id == "hire_employee":
+            new_runway = after_state.get('runway', 0)
+            print(f"│    • Burn wzrósł, runway teraz: {new_runway} mies")
+            print("│    • Nowy pracownik = szybszy rozwój")
+            if new_runway < 6:
+                print(colored("│    ⚠️ UWAGA: Runway poniżej 6 mies!", Colors.RED))
+        
+        # NASTĘPNY KROK
+        print(colored("│", Colors.CYAN))
+        next_action, why, _ = self._get_priority_action()
+        print(colored(f"│ 👉 NASTĘPNY PRIORYTET: {next_action}", Colors.GREEN))
+        
+        print(colored(f"└{'─'*55}┘", Colors.CYAN))
+    
+    def _get_state_snapshot(self) -> Dict:
+        """Zwraca snapshot aktualnego stanu gry"""
+        c = self.game_state.company
+        return {
+            'cash': c.cash_on_hand,
+            'mrr': c.mrr,
+            'customers': c.paying_customers,
+            'registered': c.registered,
+            'agreement_signed': self.game_state.agreement_signed,
+            'mvp_progress': self.game_state.mvp_progress,
+            'mvp_completed': c.mvp_completed,
+            'burn': c.monthly_burn_rate,
+            'runway': c.runway_months()
+        }
+    
+    # ========================================================================
+    # P1: TABELA POSTĘPU VS CEL
+    # ========================================================================
+    
+    def _show_progress_comparison(self):
+        """Pokazuje gdzie jesteś vs gdzie chcesz być"""
+        if not self.game_state or not self.config:
+            return
+        
+        c = self.game_state.company
+        month = self.game_state.current_month
+        
+        target_mrr = self.config.target_mrr_12_months
+        target_customers = self.config.target_customers_12_months
+        
+        # Oblicz oczekiwany postęp (liniowy)
+        expected_mrr = (target_mrr / 12) * month
+        expected_customers = (target_customers / 12) * month
+        
+        print("\n### 📊 Postęp vs Cel (12 mies.)\n")
+        print("| Metryka | Teraz | Oczekiwane | Cel | Status |")
+        print("|---------|------:|----------:|----:|:------:|")
+        
+        # MRR
+        mrr_status = "🟢" if c.mrr >= expected_mrr else "🟡" if c.mrr >= expected_mrr * 0.5 else "🔴"
+        print(f"| MRR | {c.mrr:,.0f} | {expected_mrr:,.0f} | {target_mrr:,.0f} | {mrr_status} |")
+        
+        # Klienci
+        cust_status = "🟢" if c.paying_customers >= expected_customers else "🟡" if c.paying_customers >= expected_customers * 0.5 else "🔴"
+        print(f"| Klienci | {c.paying_customers} | {expected_customers:.0f} | {target_customers} | {cust_status} |")
+        
+        # Progress bar wizualny
+        mrr_pct = min(100, (c.mrr / target_mrr) * 100) if target_mrr > 0 else 0
+        cust_pct = min(100, (c.paying_customers / target_customers) * 100) if target_customers > 0 else 0
+        
+        print(f"\n📈 MRR:     [{'█' * int(mrr_pct/5)}{'░' * (20-int(mrr_pct/5))}] {mrr_pct:.0f}%")
+        print(f"👥 Klienci: [{'█' * int(cust_pct/5)}{'░' * (20-int(cust_pct/5))}] {cust_pct:.0f}%")
+        
+        # Prognoza
+        if month > 0 and c.mrr > 0:
+            monthly_mrr_growth = c.mrr / month
+            projected_mrr_12 = monthly_mrr_growth * 12
+            print(f"\n📊 Prognoza MRR w mies. 12: {projected_mrr_12:,.0f} PLN ", end="")
+            if projected_mrr_12 >= target_mrr:
+                print(colored("(cel osiągalny!)", Colors.GREEN))
+            else:
+                print(colored(f"(brakuje {target_mrr - projected_mrr_12:,.0f} PLN)", Colors.YELLOW))
+    
+    # ========================================================================
+    # P2: TRYB MENTOR - PODPOWIEDZI EDUKACYJNE
+    # ========================================================================
+    
+    def _mentor_tip(self, topic: str):
+        """Pokazuje edukacyjną podpowiedź dla danego tematu"""
+        if not getattr(self, 'mentor_mode', True):
+            return
+        
+        tips = {
+            "runway": """
+💡 MENTOR: RUNWAY
+Runway to ile miesięcy przetrwasz przy obecnym burn rate.
+Formuła: Gotówka / (Burn - MRR)
+ZASADA: Zawsze utrzymuj min. 6 miesięcy runway!
+Jeśli masz mniej - natychmiast szukaj finansowania lub klientów.""",
+            
+            "sha": """
+💡 MENTOR: SHA (Umowa Wspólników)
+To dokument OBOWIĄZKOWY gdy masz partnera.
+Określa: podział equity, vesting, good/bad leaver, decyzje.
+ZASADA: Podpisz PRZED wspólną pracą!
+Koszt: 3-8k PLN u prawnika, ale oszczędza miliony w sporach.""",
+            
+            "vesting": """
+💡 MENTOR: VESTING
+Stopniowe nabywanie udziałów w czasie (zwykle 48 mies).
+CLIFF: Pierwsze 12 mies. bez equity, potem 25% od razu.
+ZASADA: Chroni przed partnerem który odejdzie po 2 mies z equity.""",
+            
+            "pmf": """
+💡 MENTOR: PRODUCT-MARKET FIT (PMF)
+Moment gdy klienci CHCĄ Twojego produktu.
+Wskaźniki: >40% "bardzo rozczarowanych" przy utracie, organiczny wzrost.
+ZASADA: Bez PMF nie skaluj - najpierw znajdź dopasowanie.""",
+            
+            "burn": """
+💡 MENTOR: BURN RATE
+Ile pieniędzy wydajesz miesięcznie.
+Net burn = Koszty - Przychody (MRR).
+ZASADA: Trzymaj burn niski dopóki nie masz PMF.
+Lepiej wolniej rosnąć niż szybko upaść.""",
+            
+            "mrr": """
+💡 MENTOR: MRR (Monthly Recurring Revenue)
+Powtarzalny przychód miesięczny - kluczowa metryka SaaS.
+Inwestorzy patrzą na: wzrost MoM, churn, LTV/CAC.
+ZASADA: MRR > Burn = zyskowność operacyjna.""",
+            
+            "dilution": """
+💡 MENTOR: ROZWODNIENIE (Dilution)
+Przy każdej rundzie Twój % equity maleje.
+Przykład: Masz 50%, inwestor bierze 20% → zostajesz z 40%.
+ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
+        }
+        
+        if topic in tips:
+            print(colored(tips[topic], Colors.CYAN))
+    
+    # ========================================================================
+    # P2: RAPORT MIESIĘCZNY
+    # ========================================================================
+    
+    def _show_monthly_report(self):
+        """Raport zarządczy po każdym miesiącu"""
+        if not self.game_state:
+            return
+        
+        c = self.game_state.company
+        month = self.game_state.current_month
+        
+        print(f"\n## 📋 RAPORT MIESIĘCZNY - Miesiąc {month}\n")
+        
+        # KPI
+        print("### Kluczowe wskaźniki\n")
+        print("| KPI | Wartość | Status |")
+        print("|-----|--------:|:------:|")
+        
+        # Runway
+        runway = c.runway_months()
+        runway_status = "🟢" if runway > 6 else "🟡" if runway > 3 else "🔴"
+        print(f"| ⏱️ Runway | {runway} mies | {runway_status} |")
+        
+        # MRR
+        mrr_status = "🟢" if c.mrr > 5000 else "🟡" if c.mrr > 0 else "🔴"
+        print(f"| 📈 MRR | {c.mrr:,.0f} PLN | {mrr_status} |")
+        
+        # Klienci
+        cust_status = "🟢" if c.paying_customers >= 10 else "🟡" if c.paying_customers > 0 else "🔴"
+        print(f"| 👥 Klienci | {c.paying_customers} | {cust_status} |")
+        
+        # Gotówka
+        cash_status = "🟢" if c.cash_on_hand > 50000 else "🟡" if c.cash_on_hand > 10000 else "🔴"
+        print(f"| 💰 Gotówka | {c.cash_on_hand:,.0f} PLN | {cash_status} |")
+        
+        # Health check
+        print("\n### Health Check\n")
+        health_items = [
+            ("💰 Runway", f"{runway} mies", "🟢" if runway > 6 else "🟡" if runway > 3 else "🔴"),
+            ("📝 SHA", "✓" if self.game_state.agreement_signed else "✗", "🟢" if self.game_state.agreement_signed or not (self.config and self.config.has_partner) else "🔴"),
+            ("🏢 Spółka", "✓" if c.registered else "✗", "🟢" if c.registered else "🟡"),
+            ("🔧 MVP", "✓" if c.mvp_completed else f"{self.game_state.mvp_progress}%", "🟢" if c.mvp_completed else "🟡"),
+        ]
+        
+        print("| Element | Status | |")
+        print("|---------|:------:|:-:|")
+        for name, value, status in health_items:
+            print(f"| {name} | {value} | {status} |")
+        
+        # P&L
+        profit = c.mrr - c.monthly_burn_rate
+        print(f"\n### Miesięczny P&L")
+        print(f"| Pozycja | Kwota |")
+        print(f"|---------|------:|")
+        print(f"| Przychody (MRR) | {c.mrr:,.0f} PLN |")
+        print(f"| Koszty (burn) | {c.monthly_burn_rate:,.0f} PLN |")
+        color = Colors.GREEN if profit >= 0 else Colors.RED
+        print(f"| **WYNIK** | {colored(f'{profit:+,.0f} PLN', color)} |")
+        
+        # Zalecenia
+        print(colored("\n### Zalecenia na następny miesiąc\n", Colors.HEADER))
+        action, why, _ = self._get_priority_action()
+        print(f"🎯 **PRIORYTET:** {action}")
+        print(f"   *{why}*")
+    
+    # ========================================================================
+    # P2: HISTORIA Z ANALIZĄ
+    # ========================================================================
+    
+    def _analyze_history(self):
+        """Analiza historii decyzji"""
+        if not self.action_history:
+            return
+        
+        print(colored("\n### 📚 ANALIZA DECYZJI\n", Colors.HEADER))
+        
+        # Dobre decyzje
+        good = []
+        bad = []
+        
+        for entry in self.action_history:
+            if entry.get('type') == 'action':
+                effects_str = ' '.join(entry.get('effects', []))
+                if 'SHA podpisana' in effects_str or 'agreement' in entry.get('name', '').lower():
+                    good.append(("Podpisanie SHA", "Ochrona przed konfliktami"))
+                if 'zarejestrowana' in effects_str.lower():
+                    good.append(("Rejestracja spółki", "Ochrona prawna"))
+                if 'MVP' in effects_str and 'UKOŃCZONE' in effects_str:
+                    good.append(("Ukończenie MVP", "Gotowość do sprzedaży"))
+            
+            if entry.get('type') == 'event':
+                if 'Konflikt' in entry.get('name', ''):
+                    if self.game_state and not self.game_state.agreement_signed:
+                        bad.append(("Brak SHA przy konflikcie", "Konflikt można było ograniczyć umową"))
+        
+        if good:
+            print(colored("✅ DOBRE DECYZJE:", Colors.GREEN))
+            for name, why in good:
+                print(f"   • {name} - {why}")
+        
+        if bad:
+            print(colored("\n❌ BŁĘDY DO UNIKNIĘCIA:", Colors.RED))
+            for name, lesson in bad:
+                print(f"   • {name} - {lesson}")
+        
+        # Statystyki
+        print(colored("\n📊 STATYSTYKI:", Colors.CYAN))
+        actions_count = len([e for e in self.action_history if e.get('type') == 'action'])
+        events_count = len([e for e in self.action_history if e.get('type') == 'event'])
+        print(f"   Wykonane akcje: {actions_count}")
+        print(f"   Zdarzenia losowe: {events_count}")
+    
     def do_pomoc(self, arg):
         """Wyświetla pomoc"""
         help_text = [
@@ -486,7 +1141,9 @@ class BiznesShell(cmd.Cmd):
             f"{colored('status', Colors.GREEN)}     - Stan firmy",
             f"{colored('miesiac', Colors.GREEN)}    - Następny miesiąc + akcje",
             f"{colored('akcje', Colors.GREEN)}      - Dostępne akcje",
-            f"{colored('historia', Colors.GREEN)}   - Historia decyzji",
+            f"{colored('historia', Colors.GREEN)}   - Historia decyzji z analizą",
+            f"{colored('postep', Colors.GREEN)}     - Postęp vs cele",
+            f"{colored('raport', Colors.GREEN)}     - Raport miesięczny",
             "",
             f"{colored('finanse', Colors.GREEN)}    - Szczegóły finansowe",
             f"{colored('portfele', Colors.GREEN)}   - Portfele wspólników + biznes",
@@ -853,6 +1510,14 @@ class BiznesShell(cmd.Cmd):
             print(colored("Najpierw 'start'", Colors.RED))
             return
         
+        # NOWE: Sprawdź ostrzeżenia PRZED przejściem do następnego miesiąca
+        warnings = self._check_warnings_before_month()
+        if warnings:
+            if not self._show_warnings(warnings):
+                print(colored("\n↩️ Anulowano. Wykonaj akcje aby poprawić sytuację.", Colors.YELLOW))
+                self._show_game_menu()
+                return
+        
         self.game_state.current_month += 1
         self.actions_this_month = 0  # Reset licznika akcji
         month = self.game_state.current_month
@@ -1002,9 +1667,10 @@ class BiznesShell(cmd.Cmd):
                 pass
     
     def _execute_action(self, action: GameAction):
-        """Wykonuje akcję"""
+        """Wykonuje akcję z pełnym edukacyjnym feedbackiem"""
         print(colored(f"\n📋 {action.name}", Colors.HEADER))
         
+        # Pokaż podstawowe informacje
         if action.consequences:
             print(colored("   KONSEKWENCJE:", Colors.YELLOW))
             for c in action.consequences:
@@ -1020,9 +1686,32 @@ class BiznesShell(cmd.Cmd):
             for r in action.risks:
                 print(f"   ⚠️ {r}")
         
+        # P1: Pokaż edukacyjną treść jeśli dostępna
+        edu_content = EDUCATIONAL_CONTENT.get(action.id, {})
+        if edu_content:
+            print(colored("\n   📚 EDUKACJA:", Colors.CYAN))
+            if edu_content.get('educational_why'):
+                print(colored("   Dlaczego to ważne:", Colors.BOLD))
+                for line in edu_content['educational_why'].strip().split('\n'):
+                    print(f"   {line}")
+            if edu_content.get('statistics'):
+                print(colored(f"\n   📊 STATYSTYKA: {edu_content['statistics']}", Colors.YELLOW))
+            if edu_content.get('common_mistake'):
+                print(colored("\n   ⚠️ CZĘSTY BŁĄD:", Colors.RED))
+                for line in edu_content['common_mistake'].strip().split('\n'):
+                    print(f"   {line}")
+        
         if self._ask_yes_no("\nWykonać?", True):
+            # P1: Zapisz stan PRZED akcją
+            before_state = self._get_state_snapshot()
+            
             success, msg, effects = self.action_system.execute_action(action.id)
-            print(colored(f"\n{'✓' if success else '✗'} {msg}", Colors.GREEN if success else Colors.RED))
+            
+            # P1: Zapisz stan PO akcji
+            after_state = self._get_state_snapshot()
+            
+            # P1: Pokaż szczegółowy raport ze zmianami
+            self._show_action_result(action, success, before_state, after_state, msg)
             
             # Pokaż portfele przy podpisaniu SHA
             if effects.get('show_portfele') and success:
@@ -1192,7 +1881,7 @@ class BiznesShell(cmd.Cmd):
         })
     
     def do_historia(self, arg):
-        """Historia decyzji i zdarzeń"""
+        """Historia decyzji i zdarzeń z analizą"""
         if not self.game_state:
             print(colored("Najpierw 'start'", Colors.RED))
             return
@@ -1219,6 +1908,29 @@ class BiznesShell(cmd.Cmd):
             
             if entry.get('effects'):
                 print(f"      → {', '.join(entry['effects'])}")
+        
+        # P2: Dodaj analizę decyzji
+        self._analyze_history()
+    
+    def do_postep(self, arg):
+        """Pokazuje postęp vs cele (12 miesięcy)"""
+        if not self.game_state:
+            print(colored("Najpierw 'start'", Colors.RED))
+            return
+        self._show_progress_comparison()
+    
+    def do_raport(self, arg):
+        """Raport miesięczny - podsumowanie zarządcze"""
+        if not self.game_state:
+            print(colored("Najpierw 'start'", Colors.RED))
+            return
+        self._show_monthly_report()
+    
+    def do_mentor(self, arg):
+        """Włącz/wyłącz tryb mentor (podpowiedzi edukacyjne)"""
+        self.mentor_mode = not self.mentor_mode
+        status = "WŁĄCZONY" if self.mentor_mode else "WYŁĄCZONY"
+        print(colored(f"💡 Tryb mentor: {status}", Colors.CYAN))
     
     def do_status(self, arg):
         """Status firmy - pełny przegląd w formacie Markdown"""
