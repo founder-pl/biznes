@@ -1033,28 +1033,33 @@ class BiznesShell(cmd.Cmd):
         print(colored("\n  JAK CHCESZ TO ZROBIĆ?", Colors.CYAN))
 
         modes: List[Tuple[str, ActionMode]] = list(action.modes.items())
-        for i, (_, m) in enumerate(modes, 1):
+        available_modes: List[Tuple[str, ActionMode]] = []
+        for key, m in modes:
             rate = float(m.success_rate)
             if m.requires_skill and m.requires_skill not in ["legal", "financial"]:
                 if self.game_state.player_role != m.requires_skill:
                     rate -= 0.2
             available = (float(m.cost) <= 0 or company.cash_on_hand >= float(m.cost)) and remaining_points >= int(m.time_cost)
+            if available:
+                available_modes.append((key, m))
 
-            status = colored("✓", Colors.GREEN) if available else colored("✗", Colors.RED)
-            reason = ""
-            if not (float(m.cost) <= 0 or company.cash_on_hand >= float(m.cost)):
-                reason = "brak gotówki"
-            elif remaining_points < int(m.time_cost):
-                reason = "brak punktów"
+        if not available_modes:
+            print(colored("  Na razie stać Cię tylko na najtańszy tryb (template).", Colors.YELLOW))
+            print(colored("  Zbierz więcej środków, aby odblokować lepsze opcje.", Colors.DIM))
+            return None
+
+        for i, (_, m) in enumerate(available_modes, 1):
+            rate = float(m.success_rate)
+            if m.requires_skill and m.requires_skill not in ["legal", "financial"]:
+                if self.game_state.player_role != m.requires_skill:
+                    rate -= 0.2
 
             cost_txt = f"{m.cost:,} PLN" if m.cost else "0 PLN"
             time_txt = f"{m.time_cost}" if m.time_cost != 0 else "0"
             succ_txt = f"{rate*100:.0f}%"
 
-            line = f"  {colored(str(i), Colors.GREEN)}. {status} {m.name}"
+            line = f"  {colored(str(i), Colors.GREEN)}. {m.name}"
             meta = f"Koszt: {cost_txt} | Czas: {time_txt} | Sukces: {succ_txt}"
-            if reason:
-                meta += f" | {reason}"
             print(line)
             print(colored(f"     {meta}", Colors.DIM))
 
@@ -1066,9 +1071,8 @@ class BiznesShell(cmd.Cmd):
                 return None
             if not raw:
                 # domyślny: pierwszy dostępny
-                for _, m in modes:
-                    if (float(m.cost) <= 0 or company.cash_on_hand >= float(m.cost)) and remaining_points >= int(m.time_cost):
-                        return m
+                for _, m in available_modes:
+                    return m
                 return None
             try:
                 idx = int(raw) - 1
@@ -1076,14 +1080,8 @@ class BiznesShell(cmd.Cmd):
                 print(colored("Wybierz numer.", Colors.RED))
                 continue
 
-            if 0 <= idx < len(modes):
-                _, m = modes[idx]
-                if float(m.cost) > 0 and company.cash_on_hand < float(m.cost):
-                    print(colored("Brak gotówki na ten tryb.", Colors.RED))
-                    continue
-                if remaining_points < int(m.time_cost):
-                    print(colored("Brak punktów akcji na ten tryb.", Colors.RED))
-                    continue
+            if 0 <= idx < len(available_modes):
+                _, m = available_modes[idx]
                 return m
 
             print(colored("Nieprawidłowy wybór.", Colors.RED))

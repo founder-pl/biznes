@@ -1,3 +1,18 @@
+## [1.0.7] - 2026-01-30
+
+### Summary
+
+refactor(None): configuration management system
+
+### Core
+
+- update src/biznes/shell.py
+
+### Other
+
+- update src/biznes/__pycache__/shell.cpython-313.pyc
+
+
 ## [1.0.6] - 2026-01-30
 
 ### Summary
