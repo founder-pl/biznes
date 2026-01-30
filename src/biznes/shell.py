@@ -21,7 +21,9 @@ from .core.models import (
     GameState, PlayerConfig, Company, Founder, 
     LegalForm, EmploymentForm, StartupStage,
     FoundersAgreement, VestingSchedule,
-    ActionMode, ActionPointSystem, CostCalculator
+    ActionMode, ActionPointSystem, CostCalculator,
+    BusinessModel, MarketAnalysis, BUSINESS_MODELS, MARKET_CONFIGS,
+    calculate_customer_acquisition_chance
 )
 from .scenarios.engine import ScenarioEngine
 from .utils.guidance import (
@@ -555,6 +557,48 @@ class ActionSystem:
                     warning="⚠️ Sprawdź klauzulę good/bad leaver!" if self.state.agreement_signed else "⚠️ BRAK SHA - RYZYKO!"
                 ))
         
+        # AKCJE PORTFELA OSOBISTEGO
+        player = next((f for f in company.founders if f.is_player), None)
+        if player:
+            # Pożyczka od foundera do firmy
+            if player.personal_cash >= 5000:
+                actions.append(GameAction(
+                    id="founder_loan",
+                    name="💵 Pożycz firmie z własnych środków",
+                    description=f"Twoja gotówka osobista: {player.personal_cash:,.0f} PLN",
+                    category="personal",
+                    available=True,
+                    consequences=["Transfer z portfela osobistego do firmy"],
+                    benefits=["Szybka gotówka dla firmy", "Brak rozwodnienia"],
+                    risks=["Ryzyko osobiste", "Możesz nie odzyskać"]
+                ))
+            
+            # Wypłata pensji (jeśli firma ma gotówkę i jest zarejestrowana)
+            if company.registered and company.cash_on_hand >= 5000:
+                actions.append(GameAction(
+                    id="founder_salary",
+                    name="💰 Wypłać sobie pensję",
+                    description=f"Dostępne w firmie: {company.cash_on_hand:,.0f} PLN",
+                    category="personal",
+                    available=True,
+                    consequences=["Transfer z firmy do portfela osobistego"],
+                    benefits=["Gotówka na życie"],
+                    risks=["Zmniejszenie runway firmy"]
+                ))
+            
+            # Dokapitalizowanie (formalna inwestycja)
+            if player.personal_cash >= 10000 and company.registered:
+                actions.append(GameAction(
+                    id="founder_invest",
+                    name="📈 Zainwestuj w firmę",
+                    description=f"Formalne dokapitalizowanie (min 10k PLN)",
+                    category="personal",
+                    available=True,
+                    consequences=["Zwiększenie kapitału spółki"],
+                    benefits=["Więcej gotówki na rozwój", "Dokumentacja inwestycji"],
+                    risks=["Ryzyko utraty środków"]
+                ))
+
         # SPECJALNE
         actions.append(GameAction(
             id="do_nothing",
@@ -661,12 +705,32 @@ class ActionSystem:
             }
         
         elif action_id == "find_customers":
-            new_customers = random.randint(1, 5)
+            # Dynamiczna szansa akwizycji na podstawie modelu i rynku
+            acquisition_chance = calculate_customer_acquisition_chance(self.state)
+            
+            if random.random() > acquisition_chance:
+                return True, f"Nie udało się pozyskać klientów (szansa: {acquisition_chance*100:.0f}%)", {}
+            
+            # Sukces - liczba klientów zależy od modelu
+            base_customers = random.randint(1, 5)
+            if self.state.business_model:
+                if self.state.business_model.model_type == "freemium":
+                    base_customers = random.randint(3, 10)  # Więcej free userów
+                elif self.state.business_model.model_type == "enterprise":
+                    base_customers = random.randint(0, 1)  # Mniej, ale większe kontrakty
+            
+            # ARPU zależy od modelu
             avg_mrr = random.randint(150, 350)
+            if self.state.business_model:
+                avg_mrr = int(self.state.business_model.average_revenue_per_user * random.uniform(0.8, 1.2))
+            
+            new_customers = max(1, base_customers)
             company.total_customers += new_customers
             company.paying_customers += new_customers
             company.mrr += new_customers * avg_mrr
-            return True, f"Pozyskano {new_customers} klientów! MRR +{new_customers * avg_mrr} PLN", {}
+            
+            chance_info = f" (szansa: {acquisition_chance*100:.0f}%)" if self.state.business_model or self.state.market_analysis else ""
+            return True, f"Pozyskano {new_customers} klientów! MRR +{new_customers * avg_mrr} PLN{chance_info}", {}
         
         elif action_id == "hire_employee":
             before_burn = company.monthly_burn_rate
@@ -773,6 +837,95 @@ class ActionSystem:
             self.config.has_partner = False
             return True, msg, {'equity_change': result['equity_returned']}
         
+        elif action_id == "founder_loan":
+            player = next((f for f in company.founders if f.is_player), None)
+            if not player or player.personal_cash < 5000:
+                return False, "Brak środków osobistych (min 5000 PLN).", {}
+            
+            amount = min(player.personal_cash, 20000)  # Max 20k na raz
+            print(colored(f"\n💵 POŻYCZKA OD FOUNDERA", Colors.HEADER))
+            print(f"Twoja gotówka osobista: {player.personal_cash:,.0f} PLN")
+            print(f"Gotówka firmy: {company.cash_on_hand:,.0f} PLN")
+            choice = input(colored(f"Ile pożyczasz firmie? (max {amount:,.0f}, 0=anuluj): ", Colors.YELLOW)).strip()
+            try:
+                loan = int(choice)
+                if loan <= 0:
+                    return False, "Anulowano.", {}
+                loan = min(loan, int(player.personal_cash))
+            except ValueError:
+                return False, "Nieprawidłowa kwota.", {}
+            
+            player.personal_cash -= loan
+            player.personal_invested += loan
+            company.cash_on_hand += loan
+            return True, f"Pożyczyłeś firmie {loan:,.0f} PLN ze środków osobistych.", {
+                'personal_cash': -loan,
+                'company_cash': loan
+            }
+
+        elif action_id == "founder_salary":
+            player = next((f for f in company.founders if f.is_player), None)
+            if not player:
+                return False, "Brak gracza.", {}
+            if not company.registered:
+                return False, "Firma nie jest zarejestrowana.", {}
+            if company.cash_on_hand < 5000:
+                return False, "Firma ma za mało gotówki (min 5000 PLN).", {}
+            
+            max_salary = min(company.cash_on_hand - 2000, 15000)  # Zostaw min 2k w firmie
+            print(colored(f"\n💰 WYPŁATA PENSJI", Colors.HEADER))
+            print(f"Gotówka firmy: {company.cash_on_hand:,.0f} PLN")
+            print(f"Twoja gotówka osobista: {player.personal_cash:,.0f} PLN")
+            choice = input(colored(f"Ile wypłacasz? (max {max_salary:,.0f}, 0=anuluj): ", Colors.YELLOW)).strip()
+            try:
+                salary = int(choice)
+                if salary <= 0:
+                    return False, "Anulowano.", {}
+                salary = min(salary, int(max_salary))
+            except ValueError:
+                return False, "Nieprawidłowa kwota.", {}
+            
+            company.cash_on_hand -= salary
+            player.personal_cash += salary
+            player.total_received += salary
+            return True, f"Wypłaciłeś sobie {salary:,.0f} PLN pensji.", {
+                'personal_cash': salary,
+                'company_cash': -salary
+            }
+
+        elif action_id == "founder_invest":
+            player = next((f for f in company.founders if f.is_player), None)
+            if not player or player.personal_cash < 10000:
+                return False, "Brak środków osobistych (min 10000 PLN).", {}
+            if not company.registered:
+                return False, "Firma musi być zarejestrowana.", {}
+            
+            max_invest = player.personal_cash
+            print(colored(f"\n📈 INWESTYCJA W FIRMĘ", Colors.HEADER))
+            print(f"Twoja gotówka osobista: {player.personal_cash:,.0f} PLN")
+            print(f"Gotówka firmy: {company.cash_on_hand:,.0f} PLN")
+            print(colored("⚠️ To formalna inwestycja - dokumentowana w KRS.", Colors.YELLOW))
+            choice = input(colored(f"Ile inwestujesz? (min 10000, max {max_invest:,.0f}, 0=anuluj): ", Colors.YELLOW)).strip()
+            try:
+                invest = int(choice)
+                if invest <= 0:
+                    return False, "Anulowano.", {}
+                if invest < 10000:
+                    return False, "Minimalna inwestycja to 10000 PLN.", {}
+                invest = min(invest, int(player.personal_cash))
+            except ValueError:
+                return False, "Nieprawidłowa kwota.", {}
+            
+            player.personal_cash -= invest
+            player.personal_invested += invest
+            company.cash_on_hand += invest
+            company.total_raised += invest
+            return True, f"Zainwestowałeś {invest:,.0f} PLN w firmę (udokumentowane).", {
+                'personal_cash': -invest,
+                'company_cash': invest,
+                'total_raised': invest
+            }
+
         elif action_id == "do_nothing":
             return True, "Kontynuujesz obecną strategię.", {}
         
@@ -1555,7 +1708,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         self.config = PlayerConfig()
         
         # ETAP 1: Gracz
-        print(colored("ETAP 1/6: Twoje dane", Colors.HEADER))
+        print(colored("ETAP 1/8: Twoje dane", Colors.HEADER))
         self.config.player_name = self._ask("Twoje imię", "Founder")
         
         print("\nTwoja rola?")
@@ -1568,7 +1721,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         self.config.player_role = "technical" if role_idx == 0 else "business"
         
         # ETAP 2: MVP
-        print(colored("\n\nETAP 2/6: MVP", Colors.HEADER))
+        print(colored("\n\nETAP 2/8: MVP", Colors.HEADER))
         has_mvp = self._ask_yes_no("Masz już MVP/prototyp?", False)
         self.config.player_has_mvp = has_mvp
         
@@ -1587,7 +1740,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             print(colored("💡 Bez MVP zaczynasz od zera. Priorytet: zbuduj prototyp.", Colors.YELLOW))
         
         # ETAP 3: Partnerzy (wspólnicy)
-        print(colored("\n\nETAP 3/6: Wspólnicy", Colors.HEADER))
+        print(colored("\n\nETAP 3/8: Wspólnicy", Colors.HEADER))
         has_partner = self._ask_yes_no("Masz partnera/co-foundera?", False)
         self.config.has_partner = has_partner
         
@@ -1770,7 +1923,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             print(colored("💡 Solo founding jest trudniejsze, ale możliwe.", Colors.CYAN))
         
         # ETAP 4: Forma prawna
-        print(colored("\n\nETAP 4/6: Forma prawna", Colors.HEADER))
+        print(colored("\n\nETAP 4/8: Forma prawna", Colors.HEADER))
         print(colored("\n  1. PSA - ZALECANA dla startupów", Colors.GREEN))
         print("     ✓ Kapitał: 1 PLN, praca jako wkład, łatwy transfer")
         print(colored("\n  2. Sp. z o.o.", Colors.CYAN))
@@ -1780,7 +1933,7 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         self.config.legal_form = "psa" if choice == 0 else "sp_zoo"
         
         # ETAP 5: Zasoby
-        print(colored("\n\nETAP 5/6: Zasoby", Colors.HEADER))
+        print(colored("\n\nETAP 5/8: Zasoby", Colors.HEADER))
         self.config.initial_cash = self._ask_number("Gotówka na start (PLN)", 0, 500000, 10000)
         self.config.monthly_burn = self._ask_number("Burn rate (PLN/mies)", 1000, 100000, 5000)
         
@@ -1788,8 +1941,60 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         runway_color = Colors.RED if runway < 6 else Colors.YELLOW if runway < 12 else Colors.GREEN
         print(colored(f"\n📊 Runway: {runway:.1f} miesięcy", runway_color))
         
-        # ETAP 6: Cele
-        print(colored("\n\nETAP 6/6: Cele (12 mies)", Colors.HEADER))
+        # ETAP 6: Model Biznesowy
+        print(colored("\n\nETAP 6/8: Model Biznesowy", Colors.HEADER))
+        print(colored("\n  Model biznesowy wpływa na trudność pozyskania klientów,", Colors.DIM))
+        print(colored("  wartość klienta (LTV) i atrakcyjność dla inwestorów.\n", Colors.DIM))
+        
+        print(f"  {colored('1', Colors.GREEN)}. 📱 SaaS (miesięczna subskrypcja)")
+        print(f"     Przykład: Slack, Notion | Churn: 5%/mies | VC: ❤️❤️❤️")
+        print(f"  {colored('2', Colors.GREEN)}. 📅 Roczna subskrypcja (ARR)")
+        print(f"     Przykład: Adobe CC | Churn niższy | VC: ❤️❤️")
+        print(f"  {colored('3', Colors.GREEN)}. 💳 Jednorazowa licencja")
+        print(f"     Przykład: gry | Brak recurring | VC: ✗")
+        print(f"  {colored('4', Colors.GREEN)}. 🏢 Enterprise/Projekty")
+        print(f"     Przykład: consulting | Długi cykl sprzedaży | VC: ✗")
+        print(f"  {colored('5', Colors.GREEN)}. 🛒 Marketplace")
+        print(f"     Przykład: Allegro | Prowizja 5-30% | VC: ❤️❤️❤️")
+        print(f"  {colored('6', Colors.GREEN)}. 🎯 Freemium")
+        print(f"     Przykład: Spotify | Konwersja 2-5% | VC: ❤️❤️")
+        
+        model_types = ["saas", "annual_sub", "license", "enterprise", "marketplace", "freemium"]
+        model_choice = self._ask_choice("", ["SaaS", "Roczna sub", "Licencja", "Enterprise", "Marketplace", "Freemium"])
+        self.config.business_model_type = model_types[model_choice]
+        
+        model = BUSINESS_MODELS[self.config.business_model_type]
+        print(colored(f"\n✓ Model: {self.config.business_model_type.upper()}", Colors.GREEN))
+        print(f"   LTV przy ARPU 150 PLN: {model.calculate_ltv():,.0f} PLN")
+        print(f"   Atrakcyjność VC: {'❤️' * model.vc_attractiveness}")
+        
+        # ETAP 7: Analiza Rynku
+        print(colored("\n\nETAP 7/8: Analiza Rynku", Colors.HEADER))
+        print(colored("\n  Sytuacja rynkowa wpływa na trudność i szybkość wzrostu.\n", Colors.DIM))
+        
+        print(f"  {colored('1', Colors.GREEN)}. 🌱 Greenfield (brak konkurencji)")
+        print(f"     Tworzymy nową kategorię | Trudność: WYSOKA (edukacja rynku)")
+        print(f"  {colored('2', Colors.GREEN)}. 🏃 Rosnący rynek")
+        print(f"     Łapiemy falę | Trudność: ŚREDNIA | Wzrost: +15%/rok")
+        print(f"  {colored('3', Colors.GREEN)}. 🥊 Dojrzały rynek (silna konkurencja)")
+        print(f"     Odbieramy klientów | Trudność: WYSOKA (switching costs)")
+        print(f"  {colored('4', Colors.GREEN)}. 🔄 Disruption (zmiana technologii)")
+        print(f"     Stara technologia umiera | Trudność: NISKA | Timing risk")
+        print(f"  {colored('5', Colors.GREEN)}. 🏝️ Nisza")
+        print(f"     Wyspecjalizowany rynek | Premium pricing | Ograniczony TAM")
+        
+        market_types = ["greenfield", "growing", "mature", "disruption", "niche"]
+        market_choice = self._ask_choice("", ["Greenfield", "Rosnący", "Dojrzały", "Disruption", "Nisza"])
+        self.config.market_type = market_types[market_choice]
+        
+        market = MARKET_CONFIGS[self.config.market_type]
+        difficulty = "WYSOKA" if market.customer_acquisition_multiplier > 1.5 else "ŚREDNIA" if market.customer_acquisition_multiplier > 0.9 else "NISKA"
+        print(colored(f"\n✓ Rynek: {self.config.market_type.upper()}", Colors.GREEN))
+        print(f"   Trudność akwizycji: {difficulty} (×{market.customer_acquisition_multiplier:.1f})")
+        print(f"   Wzrost rynku: +{market.market_growth_rate*100:.0f}%/rok")
+        
+        # ETAP 8: Cele
+        print(colored("\n\nETAP 8/8: Cele (12 mies)", Colors.HEADER))
         self.config.target_mrr_12_months = self._ask_number("Docelowy MRR (PLN)", 1000, 500000, 10000)
         self.config.target_customers_12_months = int(self._ask_number("Docelowi klienci", 1, 10000, 50))
         
@@ -1820,7 +2025,8 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             equity_percentage=self.config.player_equity,
             brought_mvp=self.config.player_has_mvp,
             mvp_value=self.config.mvp_calculated_value,
-            is_player=True
+            is_player=True,
+            personal_cash=getattr(self.config, 'personal_savings', 20000.0),
         )
         company.founders.append(player)
         
@@ -1860,6 +2066,14 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         self.game_state.company = company
         self.game_state.founders_agreement = FoundersAgreement()
         self.game_state.mvp_progress = 100 if self.config.player_has_mvp else 0
+        
+        # Inicjalizuj model biznesowy i analizę rynku
+        business_model_type = getattr(self.config, 'business_model_type', 'saas')
+        self.game_state.business_model = BUSINESS_MODELS.get(business_model_type, BUSINESS_MODELS['saas'])
+        
+        market_type = getattr(self.config, 'market_type', 'growing')
+        self.game_state.market_analysis = MARKET_CONFIGS.get(market_type, MARKET_CONFIGS['growing'])
+        
         self.action_system = ActionSystem(self.game_state, self.config)
 
         self._recalculate_company_burn()
@@ -2169,12 +2383,81 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             self.actions_taken_this_month += 1
     
     def _show_lessons(self):
-        """Wnioski po przegranej"""
-        print(colored("\n📚 WNIOSKI:", Colors.CYAN))
+        """Wnioski po przegranej z analizą błędów"""
+        c = self.game_state.company
+        month = self.game_state.current_month
+        
+        print(colored("\n💀 GAME OVER - ANALIZA", Colors.RED))
+        print(colored("═"*60, Colors.RED))
+        
+        # Co poszło nie tak
+        print(colored("\n❌ CO POSZŁO NIE TAK:", Colors.RED))
+        
+        mistakes = []
+        
+        # Sprawdź runway startowy
+        initial_runway = self.config.initial_cash / max(self.config.monthly_burn, 1)
+        if initial_runway < 6:
+            mistakes.append({
+                "error": "Za krótki początkowy runway",
+                "detail": f"Zacząłeś z {initial_runway:.1f} mies. runway (min. zalecane: 6)",
+                "lesson": "Przed startem zbierz minimum 6 mies. kosztów"
+            })
+        
+        # Sprawdź tempo zdobywania klientów
+        expected_customers = month * 2
+        if c.paying_customers < expected_customers and month > 2:
+            mistakes.append({
+                "error": "Za wolne pozyskiwanie klientów",
+                "detail": f"{c.paying_customers} klientów w {month} mies. (oczekiwane: ~{expected_customers})",
+                "lesson": "Szukaj klientów od dnia 1, nawet bez gotowego produktu"
+            })
+        
+        # Sprawdź burn vs MRR
+        if c.mrr < c.monthly_burn_rate * 0.5 and month > 3:
+            mistakes.append({
+                "error": "MRR nie pokrywa kosztów",
+                "detail": f"MRR {c.mrr:,.0f} vs Burn {c.monthly_burn_rate:,.0f}",
+                "lesson": "Celuj w MRR > Burn w ciągu 6-12 mies."
+            })
+        
+        # Sprawdź czy szukał finansowania
+        if c.total_raised == 0 and month > 6:
+            mistakes.append({
+                "error": "Brak zewnętrznego finansowania",
+                "detail": "Nie pozyskałeś inwestora ani pożyczki",
+                "lesson": "Przy niskim runway rozmawiaj z inwestorami"
+            })
+        
+        # Sprawdź SHA
         if self._has_partner() and not self.game_state.agreement_signed:
-            print("   • Zawsze podpisuj umowę wspólników!")
-        print("   • Pilnuj runway - min 6 miesięcy")
-        print("   • Szukaj klientów ASAP")
+            mistakes.append({
+                "error": "Brak umowy wspólników (SHA)",
+                "detail": "Masz partnera bez formalnej umowy",
+                "lesson": "Zawsze podpisuj SHA przed rozpoczęciem pracy"
+            })
+        
+        for i, m in enumerate(mistakes, 1):
+            print(colored(f"\n{i}. {m['error']}", Colors.YELLOW))
+            print(f"   📊 {m['detail']}")
+            print(colored(f"   💡 {m['lesson']}", Colors.CYAN))
+        
+        if not mistakes:
+            print("   Trudno wskazać konkretny błąd - czasem po prostu się nie udaje.")
+        
+        # Co mogłeś zrobić inaczej
+        print(colored("\n✅ CO MOGŁEŚ ZROBIĆ INACZEJ:", Colors.GREEN))
+        print("   1. Zacząć z większym runway (min. 6 mies.)")
+        print("   2. Szukać klientów od pierwszego dnia")
+        print("   3. Obciąć koszty wcześniej gdy runway < 4 mies.")
+        print("   4. Szukać inwestora/pożyczki gdy runway < 6 mies.")
+        
+        # Statystyki rozgrywki
+        print(colored(f"\n📊 TWOJA GRA:", Colors.CYAN))
+        print(f"   Przetrwałeś: {month} miesięcy")
+        print(f"   Zdobytych klientów: {c.paying_customers}")
+        print(f"   Najwyższe MRR: {c.mrr:,.0f} PLN")
+        print(f"   MVP: {'Ukończone' if c.mvp_completed else f'{self.game_state.mvp_progress}%'}")
     
     def _generate_random_event(self) -> Optional[Dict]:
         """Generuje losowe zdarzenie z konsekwencjami"""
@@ -2473,6 +2756,64 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
             return
         self._show_action_menu()
     
+    def do_dashboard(self, arg):
+        """Skonsolidowany widok wszystkiego"""
+        if not self.game_state:
+            print(colored("Najpierw 'start'", Colors.RED))
+            return
+        
+        c = self.game_state.company
+        month = self.game_state.current_month
+        self._recalculate_company_burn()
+        
+        print(colored("\n" + "═"*70, Colors.CYAN))
+        print(colored(f"  📊 DASHBOARD - Miesiąc {month}", Colors.BOLD))
+        print(colored("═"*70, Colors.CYAN))
+        
+        # SEKCJA 1: KRYTYCZNE WSKAŹNIKI
+        runway = c.runway_months()
+        runway_color = Colors.RED if runway < 3 else Colors.YELLOW if runway < 6 else Colors.GREEN
+        net_result = c.mrr - c.monthly_burn_rate
+        result_color = Colors.GREEN if net_result >= 0 else Colors.RED
+        
+        print(f"\n  💰 GOTÓWKA: {colored(f'{c.cash_on_hand:>10,.0f} PLN', runway_color)}    ⏱️ RUNWAY: {colored(f'{runway:>2}', runway_color)} mies")
+        print(f"  📈 MRR:     {c.mrr:>10,.0f} PLN    🔥 BURN:   {c.monthly_burn_rate:>6,.0f} PLN/mies")
+        print(f"  👥 KLIENCI: {c.paying_customers:>10}         💹 WYNIK:  {colored(f'{net_result:>+6,.0f} PLN/mies', result_color)}")
+        
+        # SEKCJA 2: RYZYKA
+        risks = self._get_all_risks()
+        if risks:
+            print(colored("\n⚠️ AKTYWNE RYZYKA:", Colors.RED))
+            for risk in risks[:3]:
+                print(f"   {risk['icon']} {risk['name']}: {risk['action']}")
+        
+        # SEKCJA 3: PRIORYTET
+        action, why, _ = self._get_priority_action()
+        print(colored(f"\n🎯 PRIORYTET: {action}", Colors.YELLOW))
+        print(f"   {why}")
+        
+        # SEKCJA 4: STATUS CHECKLIST
+        print(colored("\n📋 CHECKLIST:", Colors.CYAN))
+        items = [
+            ("Spółka", c.registered, "Zarejestruj w KRS"),
+            ("SHA", self.game_state.agreement_signed or not self.config.has_partner, "Podpisz umowę wspólników"),
+            ("MVP", c.mvp_completed, f"Ukończ produkt ({self.game_state.mvp_progress}%)"),
+            ("PMF", c.paying_customers >= 10, f"Zdobądź klientów ({c.paying_customers}/10)"),
+        ]
+        for name, done, todo in items:
+            status = colored("✅", Colors.GREEN) if done else colored("⬜", Colors.DIM)
+            text = colored(name, Colors.GREEN) if done else f"{name} → {todo}"
+            print(f"   {status} {text}")
+        
+        # SEKCJA 5: WSPÓLNICY
+        print(colored("\n👥 WSPÓLNICY:", Colors.CYAN))
+        for f in c.founders:
+            verified = "✓" if f.krs_verified else "⚠️"
+            vested_pct = (f.vested_percentage / f.equity_percentage * 100) if f.equity_percentage > 0 else 0
+            print(f"   {f.name}: {f.equity_percentage:.0f}% equity (vested: {vested_pct:.0f}%) {verified}")
+        
+        print(colored("\n" + "═"*70, Colors.CYAN))
+
     def do_finanse(self, arg):
         """Finanse"""
         if not self.game_state:
@@ -2518,11 +2859,12 @@ ZASADA: Lepiej mieć 10% firmy wartej 100M niż 100% wartej 0."""
         print(header)
         print(separator)
 
+        print("| **Gotówka osobista** | " + " | ".join(f"{f.personal_cash:,.0f} PLN" for f in founders) + " |")
         print("| **Equity** | " + " | ".join(f"{f.equity_percentage:.0f}%" for f in founders) + " |")
         print("| **Vested** | " + " | ".join(f"{f.vested_percentage:.1f}%" for f in founders) + " |")
         print("| **Zainwestowane** | " + " | ".join(f"{f.personal_invested:,.0f} PLN" for f in founders) + " |")
         print("| **Otrzymane z firmy** | " + " | ".join(f"{f.total_received:,.0f} PLN" for f in founders) + " |")
-        print("| **Bilans** | " + " | ".join(f"{(f.total_received - f.personal_invested):+,.0f} PLN" for f in founders) + " |")
+        print("| **Bilans netto** | " + " | ".join(f"{(f.total_received - f.personal_invested):+,.0f} PLN" for f in founders) + " |")
         print("| **MVP wniesione** | " + " | ".join(f"{f.mvp_value:,.0f} PLN" if f.mvp_value > 0 else "-" for f in founders) + " |")
         print("| **Kontakty** | " + " | ".join(str(f.contacts_count) if f.contacts_count > 0 else "-" for f in founders) + " |")
         print("| **Zweryfikowany** | " + " | ".join("✓" if f.krs_verified and f.debtor_registry_verified else "⚠️" for f in founders) + " |")

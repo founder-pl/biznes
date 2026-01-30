@@ -25,7 +25,8 @@ except ImportError:
 
 from .core.models import (
     GameState, PlayerConfig, Company, Founder,
-    LegalForm, FoundersAgreement
+    LegalForm, FoundersAgreement,
+    ActionMode, ActionPointSystem, CostCalculator,
 )
 from .utils.guidance import (
     get_priority_action as _get_priority_action_shared,
@@ -404,6 +405,62 @@ class ActionResultModal(ModalScreen):
         self.dismiss(True)
 
 
+class ModeSelectionModal(ModalScreen):
+    """Modal wyboru trybu wykonania akcji (DIY vs outsource)"""
+
+    BINDINGS = [Binding("escape", "cancel", "Anuluj")]
+
+    def __init__(self, action_name: str, modes: List[ActionMode], remaining_points: int, cash: float):
+        super().__init__()
+        self.action_name = action_name
+        self.modes = modes
+        self.remaining_points = remaining_points
+        self.cash = cash
+
+    def compose(self) -> ComposeResult:
+        items = []
+        for i, m in enumerate(self.modes):
+            can_afford = self.cash >= m.cost
+            has_points = self.remaining_points >= m.time_cost
+            available = can_afford and has_points
+
+            cost_str = f"{m.cost:,.0f} PLN" if m.cost else "0 PLN"
+            time_str = f"{m.time_cost} pkt"
+            success_str = f"{m.success_rate * 100:.0f}%"
+
+            if available:
+                label = f"✓ {m.name}  |  💰 {cost_str}  |  ⚡ {time_str}  |  🎯 {success_str}"
+            else:
+                reason = "brak gotówki" if not can_afford else "brak punktów"
+                label = f"✗ {m.name}  ({reason})"
+
+            item = ListItem(Label(label), id=f"mode-{i}")
+            if not available:
+                item.disabled = True
+            items.append(item)
+
+        yield Container(
+            Static(f"⚙️ WYBIERZ TRYB: {self.action_name}", classes="modal-title"),
+            Rule(),
+            Static(f"Pozostało punktów: {self.remaining_points}  |  Gotówka: {self.cash:,.0f} PLN", classes="mode-info"),
+            Static(""),
+            ListView(*items, id="mode-list"),
+            Rule(),
+            Static("[Enter] Wybierz  |  [Esc] Anuluj", classes="modal-hint"),
+            classes="mode-selection-modal",
+        )
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if not event.item.id or not event.item.id.startswith("mode-"):
+            return
+        idx = int(event.item.id.split("-")[1])
+        if idx < len(self.modes):
+            self.dismiss(self.modes[idx])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class RiskModal(ModalScreen):
     """Modal dla analizy ryzyka"""
     
@@ -482,10 +539,14 @@ class GameScreen(Screen):
         super().__init__()
         self.game_state: Optional[GameState] = None
         self.action_history: List[Dict] = []
-        self.actions_this_month = 0
-        self.max_actions = 2
+        self.actions_this_month = 0  # zużyte punkty akcji
+        self.max_action_points = 4   # dynamicznie przeliczane
+        self.actions_taken_this_month = 0
+        self.max_actions_taken_per_month = 6
         self.current_actions: List[Dict] = []
         self._actions_render_counter: int = 0
+        self._action_point_system = ActionPointSystem()
+        self._cost_calculator = CostCalculator()
     
     def compose(self) -> ComposeResult:
         yield Header()
@@ -592,7 +653,8 @@ class GameScreen(Screen):
             role=config.player_role,
             equity_percentage=config.player_equity,
             brought_mvp=config.player_has_mvp,
-            is_player=True
+            is_player=True,
+            personal_cash=getattr(config, 'personal_savings', 20000.0),
         )
         company.founders.append(player)
         
@@ -608,6 +670,27 @@ class GameScreen(Screen):
         self.game_state.company = company
         self.game_state.founders_agreement = FoundersAgreement()
         self.game_state.mvp_progress = 100 if config.player_has_mvp else 0
+
+        # Inicjalizuj dynamiczny burn
+        company.founder_living_cost = config.monthly_burn
+        company.cost_multiplier = 1.0
+        company.extra_monthly_costs = 0.0
+        self._recalculate_company_burn()
+        self._recalculate_action_points()
+
+    def _recalculate_company_burn(self) -> None:
+        """Przelicz dynamiczny burn na podstawie stanu gry"""
+        if not self.game_state:
+            return
+        self.game_state.company.monthly_burn_rate = float(
+            self._cost_calculator.total_burn(self.game_state)
+        )
+
+    def _recalculate_action_points(self) -> None:
+        """Przelicz dostępne punkty akcji na podstawie stanu gry"""
+        if not self.game_state:
+            return
+        self.max_action_points = self._action_point_system.calculate(self.game_state)
 
     def _get_risk_indicators(self) -> str:
         if not self.game_state:
@@ -685,6 +768,9 @@ class GameScreen(Screen):
 
         self.game_state.current_month += 1
         self.actions_this_month = 0
+        self.actions_taken_this_month = 0
+        self._recalculate_company_burn()
+        self._recalculate_action_points()
 
         c = self.game_state.company
 
@@ -778,9 +864,9 @@ class GameScreen(Screen):
                 item.disabled = True
             actions_list.append(item)
         
-        remaining = self.max_actions - self.actions_this_month
+        remaining = max(0, self.max_action_points - self.actions_this_month)
         self.query_one("#actions-remaining", Static).update(
-            f"Pozostało akcji: {remaining}/{self.max_actions}  |  [M] nowy miesiąc"
+            f"⚡ Punkty akcji: {remaining}/{self.max_action_points}  |  [M] nowy miesiąc"
         )
         
         # Wyczyść podgląd
@@ -873,14 +959,21 @@ class GameScreen(Screen):
         
         has_partner = len([f for f in c.founders if not f.is_player]) > 0
         if not self.game_state.agreement_signed:
+            sha_modes = [
+                ActionMode(name="📝 DIY (szablon)", cost=500, time_cost=2, success_rate=0.5, quality_modifier=0.7),
+                ActionMode(name="⚖️ Prawnik (standard)", cost=5000, time_cost=1, success_rate=0.95, quality_modifier=1.0),
+                ActionMode(name="🏆 Kancelaria premium", cost=12000, time_cost=1, success_rate=0.99, quality_modifier=1.2),
+            ]
+            min_cost = min(m.cost for m in sha_modes if c.cash_on_hand >= m.cost) if any(c.cash_on_hand >= m.cost for m in sha_modes) else 5000
             actions.append({
                 'id': 'sha', 'name': '📝 Podpisz SHA',
                 'description': "Shareholders Agreement - umowa wspólników",
-                'available': has_partner and c.cash_on_hand >= 5000,
-                'blocked': 'Brak partnera' if not has_partner else 'Potrzebujesz 5000 PLN' if c.cash_on_hand < 5000 else '',
+                'available': has_partner and any(c.cash_on_hand >= m.cost for m in sha_modes),
+                'blocked': 'Brak partnera' if not has_partner else f'Potrzebujesz min {min_cost} PLN' if not any(c.cash_on_hand >= m.cost for m in sha_modes) else '',
                 'recommended': has_partner,
-                'cost': 5000,
-                'consequences': ["Koszt prawnika: 3000-8000 PLN"],
+                'cost': min_cost,
+                'modes': sha_modes,
+                'consequences': ["Koszt: 500-12000 PLN zależnie od trybu"],
                 'benefits': ["Jasne zasady vestingu", "Ochrona przed bad leaver", "Procedury rozwiązywania sporów"],
                 'risks': ["Bez umowy: KRYTYCZNE RYZYKO sporów!"],
                 'warning': "⚠️ BEZ UMOWY RYZYKUJESZ WSZYSTKO!" if has_partner else ""
@@ -913,14 +1006,20 @@ class GameScreen(Screen):
         
         # PRODUKT
         if not c.mvp_completed:
+            mvp_modes = [
+                ActionMode(name="🔧 Zrób sam (DIY)", cost=0, time_cost=1, success_rate=0.7, quality_modifier=1.0),
+                ActionMode(name="💻 Freelancer", cost=3000, time_cost=1, success_rate=0.85, quality_modifier=1.2),
+                ActionMode(name="🏢 Agencja dev", cost=8000, time_cost=1, success_rate=0.95, quality_modifier=1.4),
+            ]
             actions.append({
                 'id': 'mvp', 'name': '🔧 Rozwijaj MVP',
                 'description': "Kontynuuj prace nad produktem",
                 'available': True,
                 'recommended': True,
-                'consequences': ["Postęp: +20-35%"],
+                'modes': mvp_modes,
+                'consequences': ["Postęp: +20-40% zależnie od trybu"],
                 'benefits': ["Przybliża do klientów", "Walidacja pomysłu"],
-                'risks': []
+                'risks': ["DIY: 70% sukces", "Freelancer: 85%", "Agencja: 95%"]
             })
         
         if c.mvp_completed or self.game_state.mvp_progress >= 100:
@@ -1002,6 +1101,39 @@ class GameScreen(Screen):
                     'risks': ["Mniejszy cashflow przez 3 mies."]
                 })
         
+        # AKCJE PORTFELA OSOBISTEGO
+        player = next((f for f in c.founders if f.is_player), None)
+        if player:
+            if player.personal_cash >= 5000:
+                actions.append({
+                    'id': 'founder_loan', 'name': '💵 Pożycz firmie',
+                    'description': f"Twoja gotówka: {player.personal_cash:,.0f} PLN",
+                    'available': True,
+                    'consequences': ["Transfer z portfela osobistego"],
+                    'benefits': ["Szybka gotówka dla firmy"],
+                    'risks': ["Ryzyko osobiste"]
+                })
+            
+            if c.registered and c.cash_on_hand >= 5000:
+                actions.append({
+                    'id': 'founder_salary', 'name': '💰 Wypłać pensję',
+                    'description': f"Firma ma: {c.cash_on_hand:,.0f} PLN",
+                    'available': True,
+                    'consequences': ["Transfer do portfela osobistego"],
+                    'benefits': ["Gotówka na życie"],
+                    'risks': ["Mniejszy runway firmy"]
+                })
+            
+            if player.personal_cash >= 10000 and c.registered:
+                actions.append({
+                    'id': 'founder_invest', 'name': '📈 Zainwestuj w firmę',
+                    'description': "Formalne dokapitalizowanie",
+                    'available': True,
+                    'consequences': ["Zwiększenie kapitału"],
+                    'benefits': ["Więcej gotówki na rozwój"],
+                    'risks': ["Ryzyko utraty środków"]
+                })
+
         actions.append({
             'id': 'skip', 'name': '⏭️ Pomiń (następny miesiąc)',
             'description': "Kontynuuj obecną strategię",
@@ -1012,7 +1144,8 @@ class GameScreen(Screen):
         return actions
     
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if self.actions_this_month >= self.max_actions:
+        remaining = self.max_action_points - self.actions_this_month
+        if remaining <= 0 or self.actions_taken_this_month >= self.max_actions_taken_per_month:
             return
         
         item_id = event.item.id
@@ -1024,10 +1157,28 @@ class GameScreen(Screen):
         if idx < len(self.current_actions):
             action = self.current_actions[idx]
             if action['available']:
-                self._execute_action(action)
+                modes = action.get('modes')
+                if modes and len(modes) > 1:
+                    self._show_mode_selection(action, modes, remaining)
+                else:
+                    self._execute_action(action, modes[0] if modes else None)
+
+    def _show_mode_selection(self, action: Dict, modes: List[ActionMode], remaining_points: int) -> None:
+        """Pokaż modal wyboru trybu dla akcji z wieloma trybami"""
+        cash = self.game_state.company.cash_on_hand if self.game_state else 0
+
+        def _on_mode_selected(selected_mode: Optional[ActionMode]) -> None:
+            if selected_mode:
+                self._execute_action(action, selected_mode)
+
+        self.app.push_screen(
+            ModeSelectionModal(action['name'], modes, remaining_points, cash),
+            _on_mode_selected
+        )
     
-    def _execute_action(self, action: Dict) -> None:
+    def _execute_action(self, action: Dict, mode: Optional[ActionMode] = None) -> None:
         c = self.game_state.company
+        time_cost = int(mode.time_cost) if mode else 1
 
         before_state = self._get_state_snapshot()
         effect_msg = ""
@@ -1045,12 +1196,18 @@ class GameScreen(Screen):
                 self._log_action(action['name'], effect_msg)
         
         elif action['id'] == 'sha':
-            cost = action.get('cost', 5000)
-            if c.cash_on_hand >= cost:
-                c.cash_on_hand -= cost
-                self.game_state.agreement_signed = True
-                self.game_state.founders_agreement.signed = True
-                effect_msg = f"-{cost} PLN, SHA podpisana"
+            selected = mode or ActionMode(name="Prawnik", cost=5000, time_cost=1, success_rate=0.95)
+            if c.cash_on_hand < selected.cost:
+                effect_msg = f"Brak środków ({selected.cost} PLN)"
+                self._log_action(action['name'], effect_msg)
+            else:
+                c.cash_on_hand -= selected.cost
+                if random.random() <= selected.success_rate:
+                    self.game_state.agreement_signed = True
+                    self.game_state.founders_agreement.signed = True
+                    effect_msg = f"-{selected.cost} PLN, SHA podpisana"
+                else:
+                    effect_msg = f"-{selected.cost} PLN, negocjacje trwają..."
                 self._log_action(action['name'], effect_msg)
 
         elif action['id'] == 'invite_partner':
@@ -1075,14 +1232,29 @@ class GameScreen(Screen):
                 self._log_action(action['name'], effect_msg)
         
         elif action['id'] == 'mvp':
-            progress = random.randint(20, 35)
-            self.game_state.mvp_progress = min(100, self.game_state.mvp_progress + progress)
-            if self.game_state.mvp_progress >= 100:
-                c.mvp_completed = True
-                effect_msg = "🎉 MVP ukończone!"
+            selected = mode or ActionMode(name="DIY", cost=0, time_cost=1, success_rate=0.7, quality_modifier=1.0)
+            if c.cash_on_hand < selected.cost:
+                effect_msg = f"Brak środków ({selected.cost} PLN)"
                 self._log_action(action['name'], effect_msg)
             else:
-                effect_msg = f"+{progress}% (teraz: {self.game_state.mvp_progress}%)"
+                if selected.cost:
+                    c.cash_on_hand -= selected.cost
+                if random.random() <= selected.success_rate:
+                    base_progress = random.randint(20, 30)
+                    progress = int(round(base_progress * float(selected.quality_modifier)))
+                    progress = max(1, min(40, progress))
+                    self.game_state.mvp_progress = min(100, self.game_state.mvp_progress + progress)
+                    if self.game_state.mvp_progress >= 100:
+                        c.mvp_completed = True
+                        effect_msg = f"🎉 MVP ukończone! (-{selected.cost} PLN)" if selected.cost else "🎉 MVP ukończone!"
+                    else:
+                        effect_msg = f"+{progress}% (teraz: {self.game_state.mvp_progress}%)"
+                        if selected.cost:
+                            effect_msg += f" -{selected.cost} PLN"
+                else:
+                    effect_msg = "Nie udało się posunąć MVP w tym miesiącu"
+                    if selected.cost:
+                        effect_msg += f" (-{selected.cost} PLN)"
                 self._log_action(action['name'], effect_msg)
         
         elif action['id'] == 'customers':
@@ -1127,8 +1299,9 @@ class GameScreen(Screen):
         elif action['id'] == 'cut_costs':
             reduction = random.uniform(0.3, 0.5)
             old_burn = c.monthly_burn_rate
-            c.monthly_burn_rate = int(c.monthly_burn_rate * (1 - reduction))
-            saved = old_burn - c.monthly_burn_rate
+            c.cost_multiplier *= (1 - reduction)
+            self._recalculate_company_burn()
+            saved = max(0, old_burn - c.monthly_burn_rate)
             effect_msg = f"Burn -{reduction*100:.0f}% ({saved:,.0f} PLN/mies)"
             self._log_action(action['name'], effect_msg)
 
@@ -1136,7 +1309,8 @@ class GameScreen(Screen):
             amount = random.randint(10000, 20000)
             payment = int(amount * 0.015)
             c.cash_on_hand += amount
-            c.monthly_burn_rate += payment
+            c.extra_monthly_costs += payment
+            self._recalculate_company_burn()
             effect_msg = f"+{amount:,.0f} PLN, rata ~{payment:,.0f}/mies"
             self._log_action(action['name'], effect_msg)
 
@@ -1158,9 +1332,53 @@ class GameScreen(Screen):
                 effect_msg = f"+{advance:,.0f} PLN (3x MRR)"
                 self._log_action(action['name'], effect_msg)
 
+        elif action['id'] == 'founder_loan':
+            player = next((f for f in c.founders if f.is_player), None)
+            if player and player.personal_cash >= 5000:
+                loan = min(int(player.personal_cash), 10000)  # Domyślnie 10k w TUI
+                player.personal_cash -= loan
+                player.personal_invested += loan
+                c.cash_on_hand += loan
+                effect_msg = f"Pożyczyłeś firmie {loan:,.0f} PLN"
+                self._log_action(action['name'], effect_msg)
+            else:
+                effect_msg = "Brak środków osobistych"
+                self._log_action(action['name'], effect_msg)
+
+        elif action['id'] == 'founder_salary':
+            player = next((f for f in c.founders if f.is_player), None)
+            if player and c.registered and c.cash_on_hand >= 5000:
+                salary = min(int(c.cash_on_hand - 2000), 8000)  # Domyślnie max 8k
+                c.cash_on_hand -= salary
+                player.personal_cash += salary
+                player.total_received += salary
+                effect_msg = f"Wypłaciłeś sobie {salary:,.0f} PLN"
+                self._log_action(action['name'], effect_msg)
+            else:
+                effect_msg = "Brak środków w firmie"
+                self._log_action(action['name'], effect_msg)
+
+        elif action['id'] == 'founder_invest':
+            player = next((f for f in c.founders if f.is_player), None)
+            if player and player.personal_cash >= 10000 and c.registered:
+                invest = min(int(player.personal_cash), 15000)  # Domyślnie max 15k
+                player.personal_cash -= invest
+                player.personal_invested += invest
+                c.cash_on_hand += invest
+                c.total_raised += invest
+                effect_msg = f"Zainwestowałeś {invest:,.0f} PLN w firmę"
+                self._log_action(action['name'], effect_msg)
+            else:
+                effect_msg = "Brak środków lub firma niezarejestrowana"
+                self._log_action(action['name'], effect_msg)
+
         after_state = self._get_state_snapshot()
-        self.actions_this_month += 1
-        pending_next_month = self.actions_this_month >= self.max_actions
+        self.actions_this_month += time_cost
+        self.actions_taken_this_month += 1
+        self._recalculate_company_burn()
+        self._recalculate_action_points()
+        remaining = self.max_action_points - self.actions_this_month
+        pending_next_month = remaining <= 0 or self.actions_taken_this_month >= self.max_actions_taken_per_month
         self._update_display()
 
         changes = self._format_state_changes(before_state, after_state)
@@ -2177,6 +2395,8 @@ class BiznesApp(App):
 
     .action-result-modal { align: center middle; width: 78; height: auto; border: double $success; padding: 2; background: $surface; }
     .save-load-modal { align: center middle; width: 70; height: auto; border: solid $primary; padding: 2; background: $surface; }
+    .mode-selection-modal { align: center middle; width: 80; height: auto; border: double $warning; padding: 2; background: $surface; }
+    .mode-info { color: $text-muted; text-align: center; }
     .action-title { text-style: bold; }
     .action-message { color: $text; }
     .section-title { text-style: bold; color: $primary; }

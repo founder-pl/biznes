@@ -137,9 +137,21 @@ class VestingSchedule:
 
 @dataclass
 class FoundersAgreement:
-    """Umowa wspólników"""
+    """Umowa wspólników (FA przed spółką + SHA po spółce)"""
     signed: bool = False
     date_signed: Optional[datetime] = None
+    signed_month: int = 0
+    
+    # FA przed spółką (Founders Agreement)
+    fa_signed: bool = False
+    fa_signed_month: int = 0
+    trial_period_months: int = 0  # 0 = brak FA
+    trial_end_action: str = "dissolve"  # "dissolve", "extend", "incorporate"
+    preliminary_equity_split: Dict[str, float] = field(default_factory=dict)
+    
+    # SHA po spółce (Shareholders Agreement)
+    sha_signed: bool = False
+    sha_signed_month: int = 0
     
     # Klauzule
     vesting_schedule: VestingSchedule = field(default_factory=VestingSchedule)
@@ -329,6 +341,10 @@ class ActionPointSystem:
 
         return max(1, points)
 
+    def calculate(self, state: "GameState") -> int:
+        """Alias dla get_monthly_points"""
+        return self.get_monthly_points(state)
+
 
 class CostCalculator:
     def calculate_monthly_burn(self, state: "GameState") -> Dict[str, int]:
@@ -368,6 +384,221 @@ class CostCalculator:
 
 
 @dataclass
+class BusinessModel:
+    """Konfiguracja modelu biznesowego"""
+    model_type: str = "saas"  # "saas", "annual_sub", "license", "enterprise", "marketplace", "freemium"
+    
+    # Pricing
+    price_tiers: List[Dict] = field(default_factory=list)
+    average_revenue_per_user: float = 150.0  # ARPU
+    
+    # Metryki
+    expected_churn_rate: float = 0.05  # miesięczny churn
+    customer_acquisition_difficulty: float = 1.0  # mnożnik trudności
+    sales_cycle_months: float = 1.0  # czas do zamknięcia deala
+    
+    # Dla marketplace
+    take_rate: float = 0.0  # prowizja
+    requires_two_sided: bool = False
+    
+    # Dla freemium
+    free_to_paid_conversion: float = 0.03
+    
+    # Atrakcyjność dla VC (1-5)
+    vc_attractiveness: int = 3
+    
+    def calculate_ltv(self) -> float:
+        """Oblicza Lifetime Value klienta"""
+        if self.expected_churn_rate > 0:
+            avg_lifetime_months = 1 / self.expected_churn_rate
+            return self.average_revenue_per_user * avg_lifetime_months
+        return self.average_revenue_per_user * 12
+    
+    def get_monthly_churn(self, customers: int) -> int:
+        """Oblicza ile klientów odejdzie w tym miesiącu"""
+        if self.model_type == "license":
+            return 0
+        return int(customers * self.expected_churn_rate)
+
+
+BUSINESS_MODELS: Dict[str, BusinessModel] = {
+    "saas": BusinessModel(
+        model_type="saas",
+        expected_churn_rate=0.05,
+        customer_acquisition_difficulty=1.0,
+        sales_cycle_months=0.5,
+        vc_attractiveness=5
+    ),
+    "annual_sub": BusinessModel(
+        model_type="annual_sub",
+        expected_churn_rate=0.15,
+        customer_acquisition_difficulty=1.2,
+        sales_cycle_months=1.0,
+        vc_attractiveness=4
+    ),
+    "license": BusinessModel(
+        model_type="license",
+        expected_churn_rate=0.0,
+        customer_acquisition_difficulty=1.5,
+        sales_cycle_months=0.5,
+        vc_attractiveness=2
+    ),
+    "enterprise": BusinessModel(
+        model_type="enterprise",
+        expected_churn_rate=0.10,
+        customer_acquisition_difficulty=2.5,
+        sales_cycle_months=6.0,
+        vc_attractiveness=2
+    ),
+    "marketplace": BusinessModel(
+        model_type="marketplace",
+        expected_churn_rate=0.08,
+        customer_acquisition_difficulty=3.0,
+        sales_cycle_months=0.25,
+        take_rate=0.15,
+        requires_two_sided=True,
+        vc_attractiveness=5
+    ),
+    "freemium": BusinessModel(
+        model_type="freemium",
+        expected_churn_rate=0.03,
+        customer_acquisition_difficulty=0.5,
+        free_to_paid_conversion=0.03,
+        sales_cycle_months=3.0,
+        vc_attractiveness=4
+    )
+}
+
+
+@dataclass
+class MarketAnalysis:
+    """Analiza rynku i konkurencji"""
+    market_type: str = "growing"  # "greenfield", "growing", "mature", "disruption", "niche"
+    
+    # Rozmiar rynku
+    tam_size: str = "medium"  # "small", "medium", "large", "huge"
+    tam_value_pln: int = 0
+    
+    # Konkurencja
+    competitors_count: int = 0
+    has_dominant_player: bool = False
+    
+    # Wpływ na grę
+    customer_acquisition_multiplier: float = 1.0
+    price_flexibility: float = 1.0
+    market_growth_rate: float = 0.05  # roczny wzrost rynku
+    risk_of_competitor_funding: float = 0.1
+    
+    # Specyficzne dla typu
+    education_cost_multiplier: float = 1.0  # greenfield
+    switching_cost_barrier: float = 0.0  # mature market
+    timing_risk: float = 0.0  # disruption
+
+
+MARKET_CONFIGS: Dict[str, MarketAnalysis] = {
+    "greenfield": MarketAnalysis(
+        market_type="greenfield",
+        customer_acquisition_multiplier=2.0,
+        price_flexibility=1.5,
+        education_cost_multiplier=2.0,
+        risk_of_competitor_funding=0.05
+    ),
+    "growing": MarketAnalysis(
+        market_type="growing",
+        customer_acquisition_multiplier=1.0,
+        price_flexibility=1.0,
+        market_growth_rate=0.15,
+        risk_of_competitor_funding=0.25
+    ),
+    "mature": MarketAnalysis(
+        market_type="mature",
+        customer_acquisition_multiplier=1.8,
+        price_flexibility=0.7,
+        switching_cost_barrier=0.3,
+        risk_of_competitor_funding=0.15
+    ),
+    "disruption": MarketAnalysis(
+        market_type="disruption",
+        customer_acquisition_multiplier=0.7,
+        price_flexibility=1.3,
+        timing_risk=0.3,
+        market_growth_rate=0.30
+    ),
+    "niche": MarketAnalysis(
+        market_type="niche",
+        customer_acquisition_multiplier=1.3,
+        price_flexibility=1.4,
+        risk_of_competitor_funding=0.05
+    )
+}
+
+
+@dataclass
+class ContactContribution:
+    """Wycena wkładu kontaktów partnera"""
+    count: int = 0
+    quality: str = "warm"  # "hot", "warm", "cold"
+    
+    CONVERSION_RATES: Dict[str, float] = field(default_factory=lambda: {
+        "hot": 0.40,
+        "warm": 0.15,
+        "cold": 0.03
+    })
+    
+    def calculate_expected_customers(self) -> float:
+        """Oblicza oczekiwaną liczbę klientów"""
+        rate = self.CONVERSION_RATES.get(self.quality, 0.1)
+        return self.count * rate
+    
+    def calculate_value(self, ltv: float) -> float:
+        """Oblicza wartość kontaktów na podstawie LTV"""
+        expected_customers = self.calculate_expected_customers()
+        return expected_customers * ltv
+
+
+def calculate_customer_acquisition_chance(state: "GameState") -> float:
+    """Oblicza szansę pozyskania klienta na podstawie modelu i rynku"""
+    base_chance = 0.6
+    
+    # Modyfikator modelu biznesowego
+    if state.business_model:
+        base_chance *= (1 / state.business_model.customer_acquisition_difficulty)
+    
+    # Modyfikator rynku
+    if state.market_analysis:
+        base_chance *= (1 / state.market_analysis.customer_acquisition_multiplier)
+        
+        # Modyfikator konkurencji
+        if state.market_analysis.has_dominant_player:
+            base_chance *= 0.7
+    
+    # Modyfikator cyklu sprzedaży
+    if state.business_model and state.business_model.sales_cycle_months > 3:
+        base_chance *= 0.5
+    
+    # Modyfikator doświadczenia partnera
+    if any(f.experience_years > 10 for f in state.company.founders):
+        base_chance *= 1.2
+    
+    # Modyfikator kontaktów (pierwsze miesiące)
+    warm_leads = sum(f.contacts_count for f in state.company.founders if not f.is_player)
+    if warm_leads > 0 and state.current_month < 6:
+        base_chance *= 1.3
+    
+    return min(0.95, max(0.1, base_chance))
+
+
+def pluralize_months(n: int) -> str:
+    """Poprawna odmiana 'miesiąc/miesiące/miesięcy'"""
+    if n == 1:
+        return "1 miesiąc"
+    elif 2 <= n <= 4:
+        return f"{n} miesiące"
+    else:
+        return f"{n} miesięcy"
+
+
+@dataclass
 class Decision:
     """Decyzja gracza"""
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
@@ -404,6 +635,8 @@ class GameState:
     # Główne obiekty
     company: Company = field(default_factory=Company)
     founders_agreement: FoundersAgreement = field(default_factory=FoundersAgreement)
+    business_model: Optional[BusinessModel] = None
+    market_analysis: Optional[MarketAnalysis] = None
     
     # Historia
     current_month: int = 0
